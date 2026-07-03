@@ -13,6 +13,7 @@ import { CallFacade } from './store/facades/call.facade';
 import { callFeature } from './store/reducers/call.reducer';
 import { CallEffects } from './store/effects/call';
 import { authInterceptor } from './interceptors/auth.interceptor';
+import { httpErrorInterceptor } from './interceptors/http-error.interceptor';
 
 const features = [provideState(usersFeature), provideState(callFeature)];
 
@@ -20,7 +21,7 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideRouter(routes),
-    provideHttpClient(withInterceptors([authInterceptor])),
+    provideHttpClient(withInterceptors([authInterceptor, httpErrorInterceptor])),
     provideStore(),
     ...features,
     provideEffects([UsersEffects, CallEffects]),

@@ -1,8 +1,9 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { UserSearchResultDto } from '../dtos/user-search-result.dto';
+import { environment } from '../../environments/environment';
 
-const API_BASE_URL = 'https://localhost:7248/api';
+const API_BASE_URL = environment.apiBaseUrl + '/api';
 
 @Injectable({ providedIn: 'root' })
 export class UserDirectoryService {
