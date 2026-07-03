@@ -1,0 +1,90 @@
+# ------------------------
+# Angular / Node
+# ------------------------
+/.angular/cache
+dist/
+node_modules/
+tmp/
+temp/
+coverage/
+.eslintcache
+
+# Playwright runtime artifacts
+playwright-report/
+test-results/
+blob-report/
+
+# IDE / editor
+*.sublime-project
+*.sublime-workspace
+.vscode/
+*/.vs/*
+
+# Logs & temp
+*~
+*.sw[mnpcod]
+*.log
+*.tmp
+*.tmp.*
+log.txt
+npm-debug.log*
+
+# ------------------------
+# .NET / C#
+# ------------------------
+# Build folders
+bin/
+obj/
+out/
+
+# Runtime files
+*.deps.json
+*.runtimeconfig.json
+*.pdb
+*.cache
+*.generated.cs
+*.sourcelink.json
+apphost.exe
+*.nuget.dgspec.json
+*.nuget.g.props
+*.nuget.g.targets
+project.assets.json
+project.nuget.cache
+
+# Publish output
+*.publish.xml
+publish/
+
+# Visual Studio / Rider / VS Code files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.sln.ide
+.idea/
+
+# ASP.NET temporary files
+App_Data/
+
+# IIS Express
+IISExpress/
+
+# Dotnet CLI logs
+*.dotnet/
+
+# Backup files
+*.bak
+*.Backup
+
+# Test results
+TestResults/
+*.trx
+
+# Database files
+*.mdf
+*.ldf
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini

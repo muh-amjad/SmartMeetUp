@@ -1,0 +1,152 @@
+<div class="app-shell" #pageShell>
+  <header class="top-bar">
+    <div>
+      <p class="kicker">MeetUp Workbench</p>
+      <h1>{{ dashboardMode() === 'dashboard' ? 'Dashboard' : 'Meeting Room' }}</h1>
+      <p class="identity">{{ currentUsername() }} • {{ currentEmail() }}</p>
+    </div>
+
+    <div class="header-actions">
+      @if (dashboardMode() === 'dashboard') {
+        <button type="button" class="primary" (click)="startInstantMeeting()">Instant Meeting</button>
+      }
+      @if (dashboardMode() === 'call') {
+        <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
+      }
+      <button type="button" class="secondary" (click)="goHome()">Home</button>
+      <button type="button" class="danger" (click)="logout()">Logout</button>
+    </div>
+  </header>
+
+  @if (incomingCall(); as incoming) {
+    <div class="incoming-call-banner">
+      <span>{{ incoming.fromUsername }} is calling...</span>
+      <div class="incoming-actions">
+        <button type="button" class="accept-btn" (click)="acceptIncomingCall()">Accept</button>
+        <button type="button" class="reject-btn" (click)="rejectIncomingCall()">Reject</button>
+      </div>
+    </div>
+  }
+
+  @if (ringingMessage()) {
+    <div class="ringing-banner">{{ ringingMessage() }}</div>
+  }
+
+  <section class="search-panel">
+    <h2>Search Users</h2>
+    <form [formGroup]="searchForm" (ngSubmit)="searchUsers()" class="search-form">
+      <input type="text" formControlName="query" placeholder="Search by username or email" />
+      <button type="submit" [disabled]="searchForm.invalid || searching()">
+        {{ searching() ? 'Searching...' : 'Search' }}
+      </button>
+    </form>
+
+    <p class="search-message">{{ searchMessage() }}</p>
+
+    <div class="search-results">
+      @for (result of searchResults(); track result.userId) {
+        <div class="search-item">
+          <div>
+            <strong>{{ result.username }}</strong>
+            <p>{{ result.email }}</p>
+            <span [class.online]="result.isOnline" [class.offline]="!result.isOnline">
+              {{ result.isOnline ? 'Online' : 'Offline' }}
+            </span>
+          </div>
+
+          <button type="button" (click)="callSearchedUser(result)" [disabled]="!result.isOnline || !result.connectionId">
+            Call
+          </button>
+        </div>
+      }
+    </div>
+  </section>
+
+  <main class="main-grid" [class.main-grid-call]="dashboardMode() === 'call'">
+    <section class="content-section" [class.content-section-call]="dashboardMode() === 'call'">
+      @if (dashboardMode() === 'dashboard') {
+        <article class="dashboard-hero">
+          <h2>Start conversations in one click</h2>
+          <p>
+            Use Instant Meeting for quick calls or call online teammates directly from the user panel.
+          </p>
+          <div class="hero-actions">
+            <button type="button" class="primary" (click)="startInstantMeeting()">Start Instant Meeting</button>
+          </div>
+        </article>
+      }
+
+      @if (dashboardMode() === 'call') {
+        <section class="meeting-stage">
+          @if (mediaError()) {
+            <p class="media-error">{{ mediaError() }}</p>
+          }
+
+          <div class="remote-grid" [class.empty-grid]="!remoteVideos().length">
+            @if (!remoteVideos().length) {
+              <article class="waiting-card">
+                <h3>Waiting for participants</h3>
+                <p>Invite online users from the right panel to join your room.</p>
+              </article>
+            }
+
+            @for (remote of remoteVideos(); track trackByRemoteId($index, remote)) {
+              <article class="remote-tile">
+                <video [srcObject]="remote.stream" autoplay playsinline [class.video-hidden]="!remote.isCameraOn"></video>
+                @if (!remote.isCameraOn) {
+                  <div class="remote-camera-off">Camera Off</div>
+                }
+                <span class="remote-label">{{ remote.username }}</span>
+                <span class="remote-mic-status" [class.remote-mic-off]="!remote.isMicOn">
+                  {{ remote.isMicOn ? 'Mic On' : 'Mic Off' }}
+                </span>
+              </article>
+            }
+          </div>
+
+          <article class="local-pip">
+            <video #localVideo autoplay playsinline muted></video>
+            <span class="local-label">You</span>
+          </article>
+        </section>
+
+        <div class="meeting-controls">
+          <button type="button" class="secondary" (click)="toggleCamera()">
+            {{ isCameraOn ? 'Camera Off' : 'Camera On' }}
+          </button>
+          <button type="button" class="secondary" (click)="toggleMic()">
+            {{ isMicOn ? 'Mic Off' : 'Mic On' }}
+          </button>
+          <button type="button" class="danger" (click)="endCall()">End Call</button>
+        </div>
+      }
+    </section>
+
+    <aside class="users-section">
+      <h3>Online Participants</h3>
+
+      @if (!onlineUsers().length) {
+        <p class="empty">No active participants yet.</p>
+      }
+
+      @for (user of onlineUsers(); track user.id) {
+        <div class="user-item">
+          <div class="user-labels">
+            <span>{{ user.username }}</span>
+            <small>{{ user.email || 'No email exposed' }}</small>
+            <span class="status" [class.busy]="user.isInCall">{{ userStatus(user) }}</span>
+          </div>
+
+          @if (canCall(user)) {
+            <button type="button" (click)="callUser(user)">Call</button>
+          }
+        </div>
+      }
+    </aside>
+  </main>
+
+  <button type="button" class="support-fab" (click)="openSupport()" aria-label="Open support chat">
+    <span>?</span>
+    <strong>Support</strong>
+  </button>
+</div>

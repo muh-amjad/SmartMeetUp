@@ -1,0 +1,114 @@
+<div class="home-shell" #hero>
+  <div class="parallax-shape shape-a"></div>
+  <div class="parallax-shape shape-b"></div>
+
+  <header class="nav-shell">
+    <a class="brand" routerLink="/" (click)="closeMenu()" aria-label="MeetUp home">
+      <span class="brand-mark">M</span>
+      <strong>MeetUp</strong>
+    </a>
+
+    <button type="button" class="menu-btn" [attr.aria-label]="menuLabel" (click)="toggleMenu()">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+
+    <nav class="nav-links" [class.open]="isMenuOpen()">
+      @if (!isLoggedIn) {
+        <button type="button" class="link-btn" (click)="goLogin()">Login</button>
+        <button type="button" class="link-btn solid" (click)="goSignup()">Sign Up</button>
+      }
+      @if (isLoggedIn) {
+        <button type="button" class="link-btn" (click)="goDashboard()">Dashboard</button>
+      }
+    </nav>
+  </header>
+
+  <main class="hero-content">
+    <div>
+      <p class="hero-kicker">Modern virtual conversations</p>
+      <h1 class="hero-title">Bring your people together with MeetUp in seconds.</h1>
+      <p class="hero-subtitle">
+        From quick check-ins to team catchups, MeetUp gives you secure browser meetings with a clean workflow.
+      </p>
+
+      <div class="cta-row">
+        <button type="button" class="btn btn-primary" (click)="goMeetNowFromHero()">{{ meetNowLabel }}</button>
+        <button type="button" class="btn btn-ghost" (click)="goPrimaryAuth()">{{ authButtonLabel }}</button>
+      </div>
+    </div>
+
+    <article class="hero-orb" aria-label="Animated collaboration card">
+      <h2>Meet instantly</h2>
+      <p>Preview your setup and jump into high-quality video calls from any device.</p>
+    </article>
+  </main>
+
+  <section class="slider-section" #sliderSection>
+    <div class="section-heading">
+      <p>Live moments on MeetUp</p>
+      <h2>Virtual conversations that feel natural</h2>
+    </div>
+
+    <div class="slider-track">
+      @for (slide of slides; track trackByTitle($index, slide); let i = $index) {
+        <article [class]="slideClass(i)">
+          <img [src]="slide.imageUrl" [alt]="slide.title" loading="lazy" />
+          <div class="slide-copy">
+            <h3>{{ slide.title }}</h3>
+            <p>{{ slide.subtitle }}</p>
+          </div>
+        </article>
+      }
+    </div>
+
+    <div class="slider-dots">
+      @for (slide of slides; track trackByTitle($index, slide); let i = $index) {
+        <button type="button" [class.active]="activeSlide() === i" (click)="selectSlide(i)"></button>
+      }
+    </div>
+  </section>
+
+  <section class="intro-section">
+    <div>
+      <h2>What is MeetUp for?</h2>
+      <p>
+        MeetUp is built for instant collaboration. Teams can quickly find colleagues, start calls, and manage meetings
+        from one smart dashboard with a smooth mobile-friendly experience.
+      </p>
+    </div>
+    <button type="button" class="btn btn-soft" (click)="goIntroAction()">
+      {{ isLoggedIn ? 'Open Dashboard' : 'Get Started' }}
+    </button>
+  </section>
+
+  <footer class="footer-shell">
+    <div class="footer-brand">
+      <span class="brand-mark">M</span>
+      <strong>MeetUp</strong>
+    </div>
+
+    <nav class="footer-links" aria-label="Footer links">
+      <a href="#" rel="noopener">MeetUp Blog</a>
+      <a href="#" rel="noopener">Social Media</a>
+      <a href="#" rel="noopener">Terms & Conditions</a>
+      <a href="#" rel="noopener">Privacy Policy</a>
+    </nav>
+
+    <div class="footer-meta">
+      <a href="#" (click)="openLinkedInPlaceholder($event)" class="linkedin-link" rel="noopener">
+        Open LinkedIn Profile
+        <span aria-hidden="true">↗</span>
+      </a>
+      <small>{{ profileHint }}</small>
+      <p>Copyright © {{ year }} MeetUp. All rights reserved.</p>
+      <p class="signature">Built with care and collaboration by &lt;YOUR_NAME&gt;.</p>
+    </div>
+  </footer>
+
+  <button type="button" class="support-fab" (click)="openSupport()" aria-label="Open support chat">
+    <span>?</span>
+    <strong>Support</strong>
+  </button>
+</div>

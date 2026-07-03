@@ -1,0 +1,29 @@
+<section class="auth-shell">
+  <div class="auth-card" #card>
+    <h1>Welcome Back</h1>
+    <p>Continue to MeetUp and start your next conversation.</p>
+
+    <form [formGroup]="loginForm" (ngSubmit)="submit()">
+      <label>
+        Username or email
+        <input type="text" formControlName="usernameOrEmail" placeholder="you@example.com" />
+      </label>
+
+      <label>
+        Password
+        <input type="password" formControlName="password" placeholder="Your secure password" />
+      </label>
+
+      @if (errorMessage()) {
+        <p class="error">{{ errorMessage() }}</p>
+      }
+
+      <button type="submit" [disabled]="!canSubmit">{{ isSubmitting() ? 'Logging in...' : 'Log in' }}</button>
+    </form>
+
+    <p class="alt-link">
+      New to MeetUp?
+      <a routerLink="/signup">Create account</a>
+    </p>
+  </div>
+</section>

@@ -1,0 +1,31 @@
+<section class="preview-shell">
+  <div class="preview-card">
+    <header>
+      <p class="kicker">Meeting Preview</p>
+      <h1>Check your camera and mic</h1>
+      <p>Make sure everything looks and sounds right before joining.</p>
+    </header>
+
+    <div class="video-frame">
+      <video #previewVideo autoplay playsinline muted></video>
+    </div>
+
+    @if (errorMessage()) {
+      <p class="error">{{ errorMessage() }}</p>
+    }
+
+    <div class="controls">
+      <button type="button" class="secondary" (click)="toggleCamera()">
+        {{ isCameraOn ? 'Turn Camera Off' : 'Turn Camera On' }}
+      </button>
+      <button type="button" class="secondary" (click)="toggleMic()">
+        {{ isMicOn ? 'Mute Mic' : 'Unmute Mic' }}
+      </button>
+    </div>
+
+    <div class="actions">
+      <button type="button" class="cancel" (click)="cancel()">Cancel</button>
+      <button type="button" class="join" (click)="joinNow()">Join now</button>
+    </div>
+  </div>
+</section>
