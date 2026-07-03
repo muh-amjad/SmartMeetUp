@@ -4,6 +4,7 @@ import { UsersFacade } from '../store/facades/users.facade';
 import { CallOfferDto } from '../dtos/callofferDto';
 import { CallFacade } from '../store/facades/call.facade';
 import { AuthService } from './auth.service';
+import { environment } from '../../environments/environment';
 
 type IncomingCallPayload = {
   inviteId: string;
@@ -81,7 +82,7 @@ export class SignalrService {
 
   private createHubConnection() {
     this.hubConnection = new signalR.HubConnectionBuilder()
-      .withUrl('https://localhost:7248/callHub', {
+      .withUrl(environment.signalrHubUrl, {
         accessTokenFactory: () => this.authService.token() ?? '',
       })
       .withAutomaticReconnect()

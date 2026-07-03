@@ -7,8 +7,9 @@ import { LoginRequestDto } from '../dtos/login-request.dto';
 import { RefreshRequestDto } from '../dtos/refresh-request.dto';
 import { SignupRequestDto } from '../dtos/signup-request.dto';
 import { AuthUser } from '../models/auth-user.model';
+import { environment } from '../../environments/environment';
 
-const API_BASE_URL = 'https://localhost:7248/api';
+const API_BASE_URL = environment.apiBaseUrl + '/api';
 const AUTH_TOKEN_KEY = 'meetup.auth.token';
 const AUTH_REFRESH_TOKEN_KEY = 'meetup.auth.refresh-token';
 const AUTH_USER_KEY = 'meetup.auth.user';

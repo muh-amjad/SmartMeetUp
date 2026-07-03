@@ -1,6 +1,6 @@
-using MeetUp.Api.Hubs;
 using MeetUp.Api.Mappers;
 using MeetUp.Api.Repositories;
+using MeetUp.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
@@ -10,14 +10,10 @@ namespace MeetUp.Api.Controllers
     [ApiController]
     [Authorize]
     [Route("api/[controller]")]
-    public class UsersController : ControllerBase
+    public class UsersController(IUserRepository userRepository, IPresenceTracker presenceTracker) : ControllerBase
     {
-        private readonly IUserRepository _userRepository;
-
-        public UsersController(IUserRepository userRepository)
-        {
-            _userRepository = userRepository;
-        }
+        private readonly IUserRepository _userRepository = userRepository;
+        private readonly IPresenceTracker _presenceTracker = presenceTracker;
 
         [HttpGet("search")]
         public async Task<IActionResult> Search([FromQuery] string query, CancellationToken cancellationToken)
@@ -37,7 +33,7 @@ namespace MeetUp.Api.Controllers
             var results = users
                 .Select(user =>
                 {
-                    var isOnline = CallHub.TryGetOnlineConnectionByAppUserId(user.Id, out var connectionId);
+                    var isOnline = _presenceTracker.TryGetConnectionByAppUserId(user.Id, out var connectionId);
                     return UserMapper.ToSearchResultDto(user, isOnline, connectionId);
                 })
                 .ToList();

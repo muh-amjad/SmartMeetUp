@@ -2,16 +2,16 @@ using MeetUp.Api.Data;
 using MeetUp.Api;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Testcontainers.PostgreSql;
 
 namespace MeetUp.Api.Tests;
 
 public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    private SqliteConnection _connection = null!;
+    private PostgreSqlContainer _postgres = null!;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -24,25 +24,28 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
 
             services.AddDbContext<AppDbContext>(options =>
             {
-                options.UseSqlite(_connection);
+                options.UseNpgsql(_postgres.GetConnectionString());
             });
 
             var serviceProvider = services.BuildServiceProvider();
             using var scope = serviceProvider.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.Database.EnsureCreated();
+            db.Database.Migrate();
         });
     }
 
-    public Task InitializeAsync()
+    public async Task InitializeAsync()
     {
-        _connection = new SqliteConnection("DataSource=:memory:");
-        _connection.Open();
-        return Task.CompletedTask;
+        _postgres = new PostgreSqlBuilder()
+            .WithImage("pgvector/pgvector:pg16")
+            .Build();
+
+        await _postgres.StartAsync();
     }
 
     public new async Task DisposeAsync()
     {
-        await _connection.DisposeAsync();
+        await _postgres.StopAsync();
+        await _postgres.DisposeAsync();
     }
 }

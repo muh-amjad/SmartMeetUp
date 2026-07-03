@@ -1,13 +1,16 @@
 ﻿using MeetUp.Api.Dtos;
+using MeetUp.Api.Options;
+using MeetUp.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 using System.Security.Claims;
 using System.Collections.Concurrent;
 
 namespace MeetUp.Api.Hubs
 {
     [Authorize]
-    public class CallHub : Hub
+    public class CallHub(IPresenceTracker presenceTracker, IOptions<MeetingOptions> options, ILogger<CallHub> logger) : Hub
     {
         private sealed class CallInvite
         {
@@ -17,28 +20,27 @@ namespace MeetUp.Api.Hubs
             public string CalleeId { get; init; } = string.Empty;
         }
 
-        private const int MaxUsersPerRoom = 5;
         private static readonly ConcurrentDictionary<string, UserDto> allUsers = new();
-        private static readonly ConcurrentDictionary<string, string> appUserToConnectionMap = new();
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> rooms = new();
         private static readonly ConcurrentDictionary<string, CallInvite> pendingInvites = new();
 
-        public CallHub() { }
-        
+        private readonly IPresenceTracker _presenceTracker = presenceTracker;
+        private readonly IOptions<MeetingOptions> _options = options;
+        private readonly ILogger<CallHub> _logger = logger;
+
         public override async Task OnConnectedAsync()
         {
-            Console.WriteLine($"User Connected: {Context.ConnectionId}");
+            _logger.LogInformation("User connected: {ConnectionId}", Context.ConnectionId);
             await base.OnConnectedAsync();
         }
 
-
         public override async Task OnDisconnectedAsync(Exception? exception)
         {
-            Console.WriteLine($"User Disconnected: {Context.ConnectionId}");
+            _logger.LogInformation("User disconnected: {ConnectionId}", Context.ConnectionId);
             await RemoveUserFromRoom(Context.ConnectionId);
             if (allUsers.TryRemove(Context.ConnectionId, out var disconnectedUser))
             {
-                appUserToConnectionMap.TryRemove(disconnectedUser.AppUserId, out _);
+                _presenceTracker.RemoveUser(Context.ConnectionId);
             }
 
             await BroadcastUsers();
@@ -58,8 +60,11 @@ namespace MeetUp.Api.Hubs
                 return;
             }
 
-            Console.WriteLine($"{username} joined");
-            if (appUserToConnectionMap.TryGetValue(appUserId, out var existingConnectionId)
+            _logger.LogInformation("{Username} joined the call hub", username);
+
+            _presenceTracker.AddUser(appUserId, Context.ConnectionId, username);
+
+            if (_presenceTracker.TryGetConnectionByAppUserId(appUserId, out var existingConnectionId)
                 && !string.Equals(existingConnectionId, Context.ConnectionId, StringComparison.Ordinal)
                 && allUsers.TryGetValue(existingConnectionId, out var staleUser))
             {
@@ -75,13 +80,12 @@ namespace MeetUp.Api.Hubs
             };
 
             allUsers[Context.ConnectionId] = newUser;
-            appUserToConnectionMap[appUserId] = Context.ConnectionId;
 
-            Console.WriteLine($"All users: ");
-            allUsers.Values.ToList().ForEach(u =>
+            _logger.LogInformation("All users connected: {UserCount}", allUsers.Count);
+            foreach (var user in allUsers.Values)
             {
-                Console.WriteLine($"Connection ID: ${u.Id}, Username: {u.Username}");
-            });
+                _logger.LogDebug("Connection ID: {ConnectionId}, Username: {Username}", user.Id, user.Username);
+            }
 
             await BroadcastUsers();
         }
@@ -112,9 +116,9 @@ namespace MeetUp.Api.Hubs
             {
                 roomId = caller.RoomId!;
                 var currentRoomUsers = GetRoomUsers(roomId);
-                if (currentRoomUsers.Count >= MaxUsersPerRoom)
+                if (currentRoomUsers.Count >= _options.Value.MaxUsersPerRoom)
                 {
-                    await Clients.Client(callerId).SendAsync("CallFailed", $"Room is full. Max users per room is {MaxUsersPerRoom}.");
+                    await Clients.Client(callerId).SendAsync("CallFailed", $"Room is full. Max users per room is {_options.Value.MaxUsersPerRoom}.");
                     return;
                 }
             }
@@ -270,7 +274,7 @@ namespace MeetUp.Api.Hubs
                 return;
             }
 
-            Console.WriteLine($"Call offer sent: {callOffer}");
+            _logger.LogDebug("Call offer sent from {From} to {To}", callOffer.From, callOffer.To);
             await Clients.Client(callOffer.To).SendAsync("ReceiveCallOffer", callOffer);
         }
 
@@ -281,7 +285,7 @@ namespace MeetUp.Api.Hubs
                 return;
             }
 
-            Console.WriteLine($"Call answer sent: {callOffer}");
+            _logger.LogDebug("Call answer sent from {From} to {To}", callOffer.From, callOffer.To);
             await Clients.Client(callOffer.To).SendAsync("ReceiveCallAnswer", callOffer);
         }
 
@@ -362,10 +366,11 @@ namespace MeetUp.Api.Hubs
 
         public static bool TryGetOnlineConnectionByAppUserId(string appUserId, out string? connectionId)
         {
-            if (appUserToConnectionMap.TryGetValue(appUserId, out var mappedConnectionId)
-                && allUsers.ContainsKey(mappedConnectionId))
+            var allUsersList = allUsers.Values.ToList();
+            var user = allUsersList.FirstOrDefault(u => u.AppUserId == appUserId);
+            if (user != null)
             {
-                connectionId = mappedConnectionId;
+                connectionId = user.Id;
                 return true;
             }
 

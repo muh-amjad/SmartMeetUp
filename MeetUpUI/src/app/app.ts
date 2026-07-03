@@ -6,10 +6,11 @@ import { FormsModule } from '@angular/forms';
 import { appConfig } from './app.config';
 import { routes } from './app.routes';
 import { UsersEffects } from './store/effects/users';
+import { ToastComponent } from './components/toast/toast.component';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, CommonModule, FormsModule],
+  imports: [RouterOutlet, CommonModule, FormsModule, ToastComponent],
   templateUrl: './app.html',
   styleUrl: './app.css',
   standalone: true,

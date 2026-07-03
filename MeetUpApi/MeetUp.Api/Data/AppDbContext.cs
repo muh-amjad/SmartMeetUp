@@ -17,6 +17,8 @@ namespace MeetUp.Api.Data
         {
             base.OnModelCreating(builder);
 
+            builder.HasPostgresExtension("vector");
+
             builder.Entity<ApplicationUser>(entity =>
             {
                 entity.Property(user => user.DisplayName)
