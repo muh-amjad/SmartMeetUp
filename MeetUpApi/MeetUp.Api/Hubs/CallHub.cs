@@ -1,29 +1,19 @@
-﻿using MeetUp.Api.Dtos;
+using MeetUp.Api.Dtos;
 using MeetUp.Api.Options;
 using MeetUp.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
-using System.Collections.Concurrent;
 
 namespace MeetUp.Api.Hubs
 {
     [Authorize]
-    public class CallHub(IPresenceTracker presenceTracker, IOptions<MeetingOptions> options, ILogger<CallHub> logger) : Hub
+    public class CallHub(
+        IPresenceTracker presenceTracker,
+        IOptions<MeetingOptions> options,
+        ILogger<CallHub> logger) : Hub
     {
-        private sealed class CallInvite
-        {
-            public string InviteId { get; init; } = string.Empty;
-            public string RoomId { get; init; } = string.Empty;
-            public string CallerId { get; init; } = string.Empty;
-            public string CalleeId { get; init; } = string.Empty;
-        }
-
-        private static readonly ConcurrentDictionary<string, UserDto> allUsers = new();
-        private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> rooms = new();
-        private static readonly ConcurrentDictionary<string, CallInvite> pendingInvites = new();
-
         private readonly IPresenceTracker _presenceTracker = presenceTracker;
         private readonly IOptions<MeetingOptions> _options = options;
         private readonly ILogger<CallHub> _logger = logger;
@@ -37,13 +27,9 @@ namespace MeetUp.Api.Hubs
         public override async Task OnDisconnectedAsync(Exception? exception)
         {
             _logger.LogInformation("User disconnected: {ConnectionId}", Context.ConnectionId);
-            await RemoveUserFromRoom(Context.ConnectionId);
-            if (allUsers.TryRemove(Context.ConnectionId, out var disconnectedUser))
-            {
-                _presenceTracker.RemoveUser(Context.ConnectionId);
-            }
-
-            await BroadcastUsers();
+            await RemoveUserFromRoomAsync(Context.ConnectionId);
+            _presenceTracker.TryRemoveUser(Context.ConnectionId, out _);
+            await BroadcastUsersAsync();
             await base.OnDisconnectedAsync(exception);
         }
 
@@ -62,44 +48,45 @@ namespace MeetUp.Api.Hubs
 
             _logger.LogInformation("{Username} joined the call hub", username);
 
-            _presenceTracker.AddUser(appUserId, Context.ConnectionId, username);
-
+            // If this user already had a live connection, evict the stale one from any room/state.
             if (_presenceTracker.TryGetConnectionByAppUserId(appUserId, out var existingConnectionId)
-                && !string.Equals(existingConnectionId, Context.ConnectionId, StringComparison.Ordinal)
-                && allUsers.TryGetValue(existingConnectionId, out var staleUser))
+                && !string.Equals(existingConnectionId, Context.ConnectionId, StringComparison.Ordinal))
             {
-                await RemoveUserFromRoom(existingConnectionId);
-                allUsers.TryRemove(existingConnectionId, out _);
+                await RemoveUserFromRoomAsync(existingConnectionId);
+                _presenceTracker.TryRemoveUser(existingConnectionId, out _);
             }
 
-            var hadExistingConnectionState = allUsers.TryGetValue(Context.ConnectionId, out var existingConnectionUser);
-            UserDto newUser = new UserDto(Context.ConnectionId, appUserId, username, email)
+            // Preserve any in-progress call state if the same connection re-joins.
+            var hadExistingState = _presenceTracker.TryGetUser(Context.ConnectionId, out var existingConnectionUser);
+
+            var newUser = new UserDto(Context.ConnectionId, appUserId, username, email)
             {
-                IsInCall = hadExistingConnectionState && existingConnectionUser is not null && existingConnectionUser.IsInCall,
-                RoomId = hadExistingConnectionState ? existingConnectionUser?.RoomId : null,
+                IsInCall = hadExistingState && existingConnectionUser is { IsInCall: true },
+                RoomId = hadExistingState ? existingConnectionUser?.RoomId : null,
             };
 
-            allUsers[Context.ConnectionId] = newUser;
+            _presenceTracker.UpsertUser(newUser);
 
+            var allUsers = _presenceTracker.GetAllUsers();
             _logger.LogInformation("All users connected: {UserCount}", allUsers.Count);
-            foreach (var user in allUsers.Values)
+            foreach (var user in allUsers)
             {
                 _logger.LogDebug("Connection ID: {ConnectionId}, Username: {Username}", user.Id, user.Username);
             }
 
-            await BroadcastUsers();
+            await BroadcastUsersAsync();
         }
 
         public async Task StartCall(string targetUserId)
         {
             var callerId = Context.ConnectionId;
 
-            if (!allUsers.TryGetValue(callerId, out var caller))
+            if (!_presenceTracker.TryGetUser(callerId, out var caller))
             {
                 return;
             }
 
-            if (!allUsers.TryGetValue(targetUserId, out var callee))
+            if (!_presenceTracker.TryGetUser(targetUserId, out var callee))
             {
                 await Clients.Client(callerId).SendAsync("CallFailed", "User is no longer available.");
                 return;
@@ -118,7 +105,9 @@ namespace MeetUp.Api.Hubs
                 var currentRoomUsers = GetRoomUsers(roomId);
                 if (currentRoomUsers.Count >= _options.Value.MaxUsersPerRoom)
                 {
-                    await Clients.Client(callerId).SendAsync("CallFailed", $"Room is full. Max users per room is {_options.Value.MaxUsersPerRoom}.");
+                    await Clients.Client(callerId).SendAsync(
+                        "CallFailed",
+                        $"Room is full. Max users per room is {_options.Value.MaxUsersPerRoom}.");
                     return;
                 }
             }
@@ -128,13 +117,7 @@ namespace MeetUp.Api.Hubs
             }
 
             var inviteId = Guid.NewGuid().ToString("N");
-            pendingInvites[inviteId] = new CallInvite
-            {
-                InviteId = inviteId,
-                RoomId = roomId,
-                CallerId = callerId,
-                CalleeId = targetUserId,
-            };
+            _presenceTracker.AddInvite(new CallInvite(inviteId, roomId, callerId, targetUserId));
 
             await Clients.Client(targetUserId).SendAsync("ReceiveIncomingCall", new
             {
@@ -156,7 +139,7 @@ namespace MeetUp.Api.Hubs
         public async Task StartInstantMeeting()
         {
             var callerId = Context.ConnectionId;
-            if (!allUsers.TryGetValue(callerId, out var caller))
+            if (!_presenceTracker.TryGetUser(callerId, out var caller))
             {
                 return;
             }
@@ -167,8 +150,9 @@ namespace MeetUp.Api.Hubs
                 roomId = Guid.NewGuid().ToString("N");
                 caller.IsInCall = true;
                 caller.RoomId = roomId;
+                _presenceTracker.UpsertUser(caller);
                 await Groups.AddToGroupAsync(caller.Id, roomId);
-                AddUserToRoom(roomId, caller.Id);
+                _presenceTracker.AddToRoom(roomId, caller.Id);
             }
 
             var roomUsers = GetRoomUsers(roomId!);
@@ -185,31 +169,30 @@ namespace MeetUp.Api.Hubs
                 users = roomUsers,
             });
 
-            await BroadcastUsers();
+            await BroadcastUsersAsync();
         }
 
         public async Task RespondToCall(string inviteId, bool accepted)
         {
-            if (!pendingInvites.TryGetValue(inviteId, out var invite))
+            if (!_presenceTracker.TryRemoveInvite(inviteId, out var invite))
             {
                 return;
             }
 
-            if (invite.CalleeId != Context.ConnectionId)
+            if (invite.CalleeConnectionId != Context.ConnectionId)
             {
                 return;
             }
 
-            pendingInvites.TryRemove(inviteId, out _);
-
-            if (!allUsers.TryGetValue(invite.CallerId, out var caller) || !allUsers.TryGetValue(invite.CalleeId, out var callee))
+            if (!_presenceTracker.TryGetUser(invite.CallerConnectionId, out var caller)
+                || !_presenceTracker.TryGetUser(invite.CalleeConnectionId, out var callee))
             {
                 return;
             }
 
             if (!accepted)
             {
-                await Clients.Client(invite.CallerId).SendAsync("CallDeclined", new
+                await Clients.Client(invite.CallerConnectionId).SendAsync("CallDeclined", new
                 {
                     inviteId,
                     roomId = invite.RoomId,
@@ -223,20 +206,23 @@ namespace MeetUp.Api.Hubs
             {
                 caller.IsInCall = true;
                 caller.RoomId = invite.RoomId;
+                _presenceTracker.UpsertUser(caller);
                 await Groups.AddToGroupAsync(caller.Id, invite.RoomId);
-                AddUserToRoom(invite.RoomId, caller.Id);
+                _presenceTracker.AddToRoom(invite.RoomId, caller.Id);
             }
 
             if (callee.IsInCall)
             {
-                await Clients.Client(invite.CallerId).SendAsync("CallFailed", $"{callee.Username} is already in another call.");
+                await Clients.Client(invite.CallerConnectionId)
+                    .SendAsync("CallFailed", $"{callee.Username} is already in another call.");
                 return;
             }
 
             callee.IsInCall = true;
             callee.RoomId = invite.RoomId;
+            _presenceTracker.UpsertUser(callee);
             await Groups.AddToGroupAsync(callee.Id, invite.RoomId);
-            AddUserToRoom(invite.RoomId, callee.Id);
+            _presenceTracker.AddToRoom(invite.RoomId, callee.Id);
 
             var roomUsers = GetRoomUsers(invite.RoomId);
 
@@ -246,25 +232,19 @@ namespace MeetUp.Api.Hubs
                 users = roomUsers,
             });
 
-            await Clients.Client(invite.CallerId).SendAsync("CallAccepted", new
+            var acceptedPayload = new
             {
                 inviteId,
                 roomId = invite.RoomId,
                 acceptedByUserId = callee.Id,
                 acceptedByUsername = callee.Username,
                 users = roomUsers,
-            });
+            };
 
-            await Clients.Client(invite.CalleeId).SendAsync("CallAccepted", new
-            {
-                inviteId,
-                roomId = invite.RoomId,
-                acceptedByUserId = callee.Id,
-                acceptedByUsername = callee.Username,
-                users = roomUsers,
-            });
+            await Clients.Client(invite.CallerConnectionId).SendAsync("CallAccepted", acceptedPayload);
+            await Clients.Client(invite.CalleeConnectionId).SendAsync("CallAccepted", acceptedPayload);
 
-            await BroadcastUsers();
+            await BroadcastUsersAsync();
         }
 
         public async Task SendCallOffer(CallOfferDto callOffer)
@@ -291,12 +271,14 @@ namespace MeetUp.Api.Hubs
 
         public async Task SendCandidate(string roomId, string targetUserId, object candidate)
         {
-            if (!allUsers.TryGetValue(Context.ConnectionId, out var sender) || !allUsers.TryGetValue(targetUserId, out var target))
+            if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var sender)
+                || !_presenceTracker.TryGetUser(targetUserId, out var target))
             {
                 return;
             }
 
-            if (!string.Equals(sender.RoomId, roomId, StringComparison.Ordinal) || !string.Equals(target.RoomId, roomId, StringComparison.Ordinal))
+            if (!string.Equals(sender.RoomId, roomId, StringComparison.Ordinal)
+                || !string.Equals(target.RoomId, roomId, StringComparison.Ordinal))
             {
                 return;
             }
@@ -312,7 +294,7 @@ namespace MeetUp.Api.Hubs
 
         public async Task UpdateMediaState(string roomId, bool isCameraOn, bool isMicOn)
         {
-            if (!allUsers.TryGetValue(Context.ConnectionId, out var sender)
+            if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var sender)
                 || string.IsNullOrWhiteSpace(sender.RoomId)
                 || !string.Equals(sender.RoomId, roomId, StringComparison.Ordinal))
             {
@@ -330,7 +312,7 @@ namespace MeetUp.Api.Hubs
 
         public async Task LeaveCall()
         {
-            var roomId = await RemoveUserFromRoom(Context.ConnectionId);
+            var roomId = await RemoveUserFromRoomAsync(Context.ConnectionId);
             if (!string.IsNullOrWhiteSpace(roomId))
             {
                 var users = GetRoomUsers(roomId);
@@ -341,46 +323,34 @@ namespace MeetUp.Api.Hubs
                 });
             }
 
-            await BroadcastUsers();
+            await BroadcastUsersAsync();
         }
 
-        private static void AddUserToRoom(string roomId, string userId)
+        private List<UserDto> GetRoomUsers(string roomId)
         {
-            var room = rooms.GetOrAdd(roomId, _ => new ConcurrentDictionary<string, byte>());
-            room[userId] = 0;
-        }
-
-        private static List<UserDto> GetRoomUsers(string roomId)
-        {
-            if (!rooms.TryGetValue(roomId, out var userIds))
+            var connectionIds = _presenceTracker.GetRoomConnectionIds(roomId);
+            if (connectionIds.Count == 0)
             {
                 return new List<UserDto>();
             }
 
-            return userIds.Keys
-                .Select(id => allUsers.TryGetValue(id, out var user) ? user : null)
-                .Where(u => u is not null)
-                .Select(u => new UserDto(u!.Id, u.AppUserId, u.Username, u.Email, u.IsInCall, u.RoomId))
-                .ToList();
-        }
-
-        public static bool TryGetOnlineConnectionByAppUserId(string appUserId, out string? connectionId)
-        {
-            var allUsersList = allUsers.Values.ToList();
-            var user = allUsersList.FirstOrDefault(u => u.AppUserId == appUserId);
-            if (user != null)
+            var users = new List<UserDto>(connectionIds.Count);
+            foreach (var id in connectionIds)
             {
-                connectionId = user.Id;
-                return true;
+                if (_presenceTracker.TryGetUser(id, out var user))
+                {
+                    // Return a copy so downstream mutation cannot affect the tracked state.
+                    users.Add(new UserDto(user.Id, user.AppUserId, user.Username, user.Email, user.IsInCall, user.RoomId));
+                }
             }
 
-            connectionId = null;
-            return false;
+            return users;
         }
 
-        private static bool IsInSameRoom(string fromUserId, string toUserId, string roomId)
+        private bool IsInSameRoom(string fromConnectionId, string toConnectionId, string roomId)
         {
-            if (!allUsers.TryGetValue(fromUserId, out var fromUser) || !allUsers.TryGetValue(toUserId, out var toUser))
+            if (!_presenceTracker.TryGetUser(fromConnectionId, out var fromUser)
+                || !_presenceTracker.TryGetUser(toConnectionId, out var toUser))
             {
                 return false;
             }
@@ -389,34 +359,28 @@ namespace MeetUp.Api.Hubs
                 && string.Equals(toUser.RoomId, roomId, StringComparison.Ordinal);
         }
 
-        private async Task<string?> RemoveUserFromRoom(string userId)
+        private async Task<string?> RemoveUserFromRoomAsync(string connectionId)
         {
-            if (!allUsers.TryGetValue(userId, out var user) || string.IsNullOrWhiteSpace(user.RoomId))
+            if (!_presenceTracker.TryGetUser(connectionId, out var user)
+                || string.IsNullOrWhiteSpace(user.RoomId))
             {
                 return null;
             }
 
-            var roomId = user.RoomId;
+            var roomId = user.RoomId!;
             user.IsInCall = false;
             user.RoomId = null;
+            _presenceTracker.UpsertUser(user);
 
-            await Groups.RemoveFromGroupAsync(userId, roomId);
-
-            if (rooms.TryGetValue(roomId, out var roomMembers))
-            {
-                roomMembers.TryRemove(userId, out _);
-                if (roomMembers.IsEmpty)
-                {
-                    rooms.TryRemove(roomId, out _);
-                }
-            }
+            await Groups.RemoveFromGroupAsync(connectionId, roomId);
+            _presenceTracker.RemoveFromRoom(roomId, connectionId);
 
             return roomId;
         }
 
-        private Task BroadcastUsers()
+        private Task BroadcastUsersAsync()
         {
-            return Clients.All.SendAsync("UserJoined", allUsers.Values.ToList());
+            return Clients.All.SendAsync("UserJoined", _presenceTracker.GetAllUsers());
         }
     }
 }

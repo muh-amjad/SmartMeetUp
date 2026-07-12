@@ -13,7 +13,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
-using Serilog.Enrichers;
+using Serilog.Core;
 using System.Text;
 
 namespace MeetUp.Api
@@ -24,11 +24,18 @@ namespace MeetUp.Api
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Configure Serilog
-            builder.Host.UseSerilog((context, loggerConfig) =>
+            // IHttpContextAccessor is needed by the Serilog UserIdEnricher below.
+            builder.Services.AddHttpContextAccessor();
+            builder.Services.AddSingleton<ILogEventEnricher, UserIdEnricher>();
+
+            // Configure Serilog. The UserIdEnricher pulls the authenticated user id from
+            // the current HttpContext so every log entry made while handling a request is
+            // tagged with a UserId property when available.
+            builder.Host.UseSerilog((context, services, loggerConfig) =>
             {
                 loggerConfig
                     .ReadFrom.Configuration(context.Configuration)
+                    .ReadFrom.Services(services)
                     .Enrich.WithProperty("Environment", context.HostingEnvironment.EnvironmentName);
             });
 
@@ -55,7 +62,6 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
-            builder.Services.AddHttpContextAccessor();
 
             // Register FluentValidation validators
             builder.Services.AddValidatorsFromAssemblyContaining<Program>(includeInternalTypes: true);
@@ -64,9 +70,10 @@ namespace MeetUp.Api
             builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
             builder.Services.AddProblemDetails();
 
-            // Add health checks
-            builder.Services.AddHealthChecks();
-                // Note: EF Core health check registration requires additional package
+            // Health checks: /health/live is liveness only; /health/ready pings the database
+            // through the EF Core check so we return 503 when the database is unreachable.
+            builder.Services.AddHealthChecks()
+                .AddDbContextCheck<AppDbContext>("database");
 
             builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 .AddJwtBearer(options =>

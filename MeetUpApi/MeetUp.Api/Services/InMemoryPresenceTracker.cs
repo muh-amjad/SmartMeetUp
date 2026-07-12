@@ -1,129 +1,85 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
+using MeetUp.Api.Dtos;
 
 namespace MeetUp.Api.Services;
 
 public sealed class InMemoryPresenceTracker : IPresenceTracker
 {
-    private readonly ConcurrentDictionary<string, string> _appUserToConnectionMap = new();
-    private readonly ConcurrentDictionary<string, (string AppUserId, string DisplayName)> _allUsers = new();
-    private readonly ConcurrentDictionary<string, ConcurrentBag<string>> _rooms = new();
-    private readonly ConcurrentDictionary<string, ConcurrentBag<(string FromUserId, string ToUserId)>> _pendingInvites = new();
+    private readonly ConcurrentDictionary<string, UserDto> _usersByConnectionId = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _connectionIdByAppUserId = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _roomsByRoomId = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CallInvite> _invitesById = new(StringComparer.Ordinal);
 
-    public void AddUser(string appUserId, string connectionId, string displayName)
+    public void UpsertUser(UserDto user)
     {
-        _appUserToConnectionMap.TryAdd(appUserId, connectionId);
-        _allUsers.TryAdd(connectionId, (appUserId, displayName));
+        _usersByConnectionId[user.Id] = user;
+        _connectionIdByAppUserId[user.AppUserId] = user.Id;
     }
 
-    public void RemoveUser(string connectionId)
+    public bool TryGetUser(string connectionId, [NotNullWhen(true)] out UserDto? user)
     {
-        if (_allUsers.TryRemove(connectionId, out var user))
+        return _usersByConnectionId.TryGetValue(connectionId, out user);
+    }
+
+    public bool TryRemoveUser(string connectionId, [NotNullWhen(true)] out UserDto? user)
+    {
+        if (_usersByConnectionId.TryRemove(connectionId, out user))
         {
-            _appUserToConnectionMap.TryRemove(user.AppUserId, out _);
-        }
-    }
-
-    public bool TryGetConnectionByAppUserId(string appUserId, out string connectionId)
-    {
-        return _appUserToConnectionMap.TryGetValue(appUserId, out connectionId!);
-    }
-
-    public bool TryGetAppUserIdByConnectionId(string connectionId, out string appUserId)
-    {
-        appUserId = null!;
-        if (_allUsers.TryGetValue(connectionId, out var user))
-        {
-            appUserId = user.AppUserId;
+            // Only clear the app->connection mapping if it still points at this exact connection
+            // (a reconnect from the same app user may have replaced the mapping already).
+            _connectionIdByAppUserId.TryRemove(new KeyValuePair<string, string>(user.AppUserId, connectionId));
             return true;
         }
 
         return false;
     }
 
-    public IReadOnlyList<(string AppUserId, string DisplayName, string ConnectionId)> GetAllUsers()
+    public IReadOnlyCollection<UserDto> GetAllUsers()
     {
-        return _allUsers
-            .Select(kvp => (kvp.Value.AppUserId, kvp.Value.DisplayName, kvp.Key))
-            .ToList();
+        return _usersByConnectionId.Values.ToList();
     }
 
-    public void CreateRoom(string roomId)
+    public bool TryGetConnectionByAppUserId(string appUserId, [NotNullWhen(true)] out string? connectionId)
     {
-        _rooms.TryAdd(roomId, new ConcurrentBag<string>());
+        return _connectionIdByAppUserId.TryGetValue(appUserId, out connectionId);
     }
 
-    public void RemoveRoom(string roomId)
+    public void AddToRoom(string roomId, string connectionId)
     {
-        _rooms.TryRemove(roomId, out _);
+        var room = _roomsByRoomId.GetOrAdd(roomId, _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal));
+        room[connectionId] = 0;
     }
 
-    public void AddUserToRoom(string roomId, string appUserId)
+    public void RemoveFromRoom(string roomId, string connectionId)
     {
-        if (_rooms.TryGetValue(roomId, out var members))
+        if (_roomsByRoomId.TryGetValue(roomId, out var room))
         {
-            members.Add(appUserId);
-        }
-    }
-
-    public void RemoveUserFromRoom(string roomId, string appUserId)
-    {
-        if (_rooms.TryGetValue(roomId, out var members))
-        {
-            var remaining = members.Where(u => u != appUserId).ToList();
-            _rooms[roomId] = new ConcurrentBag<string>(remaining);
-        }
-    }
-
-    public IReadOnlyList<(string AppUserId, string DisplayName)> GetRoomMembers(string roomId)
-    {
-        if (!_rooms.TryGetValue(roomId, out var members))
-        {
-            return new List<(string, string)>();
-        }
-
-        var result = new List<(string, string)>();
-        foreach (var appUserId in members)
-        {
-            if (_appUserToConnectionMap.TryGetValue(appUserId, out var connectionId) &&
-                _allUsers.TryGetValue(connectionId, out var user))
+            room.TryRemove(connectionId, out _);
+            if (room.IsEmpty)
             {
-                result.Add((appUserId, user.DisplayName));
+                _roomsByRoomId.TryRemove(new KeyValuePair<string, ConcurrentDictionary<string, byte>>(roomId, room));
             }
         }
-
-        return result;
     }
 
-    public void AddPendingInvite(string roomId, string fromUserId, string toUserId)
+    public IReadOnlyCollection<string> GetRoomConnectionIds(string roomId)
     {
-        _pendingInvites
-            .GetOrAdd(roomId, _ => new ConcurrentBag<(string, string)>())
-            .Add((fromUserId, toUserId));
-    }
-
-    public void RemovePendingInvite(string roomId, string fromUserId, string toUserId)
-    {
-        if (_pendingInvites.TryGetValue(roomId, out var invites))
+        if (!_roomsByRoomId.TryGetValue(roomId, out var room))
         {
-            var remaining = invites.Where(i => !(i.FromUserId == fromUserId && i.ToUserId == toUserId)).ToList();
-            _pendingInvites[roomId] = new ConcurrentBag<(string, string)>(remaining);
-        }
-    }
-
-    public IReadOnlyList<(string RoomId, string FromUserId)> GetPendingInvitesForUser(string userId)
-    {
-        var result = new List<(string, string)>();
-        foreach (var kvp in _pendingInvites)
-        {
-            foreach (var invite in kvp.Value)
-            {
-                if (invite.ToUserId == userId)
-                {
-                    result.Add((kvp.Key, invite.FromUserId));
-                }
-            }
+            return Array.Empty<string>();
         }
 
-        return result;
+        return room.Keys.ToList();
+    }
+
+    public void AddInvite(CallInvite invite)
+    {
+        _invitesById[invite.InviteId] = invite;
+    }
+
+    public bool TryRemoveInvite(string inviteId, [NotNullWhen(true)] out CallInvite? invite)
+    {
+        return _invitesById.TryRemove(inviteId, out invite);
     }
 }

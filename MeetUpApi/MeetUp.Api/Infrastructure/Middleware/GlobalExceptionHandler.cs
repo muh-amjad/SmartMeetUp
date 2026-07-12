@@ -5,9 +5,12 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace MeetUp.Api.Infrastructure.Middleware;
 
-public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
+public sealed class GlobalExceptionHandler(
+    ILogger<GlobalExceptionHandler> logger,
+    IHostEnvironment environment) : IExceptionHandler
 {
     private readonly ILogger<GlobalExceptionHandler> _logger = logger;
+    private readonly IHostEnvironment _environment = environment;
 
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
@@ -71,7 +74,9 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
                 {
                     Status = StatusCodes.Status500InternalServerError,
                     Title = "Internal Server Error",
-                    Detail = "An internal server error occurred. Please try again later.",
+                    Detail = _environment.IsProduction()
+                        ? "An internal server error occurred. Please try again later."
+                        : $"{exception.GetType().Name}: {exception.Message}",
                     Type = "https://tools.ietf.org/html/rfc7231#section-6.6.1"
                 };
                 break;

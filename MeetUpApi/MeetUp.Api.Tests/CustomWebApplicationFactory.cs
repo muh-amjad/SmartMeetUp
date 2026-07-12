@@ -3,6 +3,7 @@ using MeetUp.Api;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Testcontainers.PostgreSql;
@@ -16,6 +17,19 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
+
+        // Inject test-only configuration values. Secrets are not committed
+        // (see Phase 0-B), so the test host provides its own JWT key.
+        builder.ConfigureAppConfiguration((_, configBuilder) =>
+        {
+            configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Jwt:Key"] = "test-jwt-signing-key-for-integration-tests-not-used-in-production-abcdefghij",
+                ["Jwt:Issuer"] = "https://api.meetup.test",
+                ["Jwt:Audience"] = "https://meetup.test",
+                ["Jwt:ExpiresMinutes"] = "180",
+            });
+        });
 
         builder.ConfigureServices(services =>
         {
@@ -49,3 +63,4 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
         await _postgres.DisposeAsync();
     }
 }
+

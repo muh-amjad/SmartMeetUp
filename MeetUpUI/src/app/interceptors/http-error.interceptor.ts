@@ -1,60 +1,32 @@
-import { Injectable } from '@angular/core';
-import {
-  HttpInterceptor,
-  HttpRequest,
-  HttpHandler,
-  HttpEvent,
-  HttpErrorResponse
-} from '@angular/common/http';
-import { Observable, throwError } from 'rxjs';
+import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
+import { inject } from '@angular/core';
+import { throwError } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { ToastService } from '../services/toast.service';
 
-@Injectable()
-export class HttpErrorInterceptor implements HttpInterceptor {
-  constructor(private toastService: ToastService) {}
+/**
+ * Functional HTTP interceptor. Parses RFC 7807 `ProblemDetails` bodies
+ * returned by the API and pushes a toast so the user always sees a message.
+ * The error is re-thrown so caller-side handlers can still react.
+ */
+export const httpErrorInterceptor: HttpInterceptorFn = (request, next) => {
+  const toastService = inject(ToastService);
 
-  intercept(
-    request: HttpRequest<any>,
-    next: HttpHandler
-  ): Observable<HttpEvent<any>> {
-    return next.handle(request).pipe(
-      catchError((error: HttpErrorResponse) => {
-        let errorMessage = 'An error occurred';
-
-        if (error.error && error.error.title) {
-          errorMessage = error.error.title;
-          if (error.error.detail) {
-            errorMessage = error.error.detail;
-          }
-        } else if (error.message) {
-          errorMessage = error.message;
-        }
-
-        this.toastService.error(errorMessage);
-        return throwError(() => error);
-      })
-    );
-  }
-}
-
-export const httpErrorInterceptor = (req: HttpRequest<any>, next: HttpHandler) => {
-  const toastService = new ToastService();
-  return next.handle(req).pipe(
+  return next(request).pipe(
     catchError((error: HttpErrorResponse) => {
       let errorMessage = 'An error occurred';
 
-      if (error.error && error.error.title) {
-        errorMessage = error.error.title;
-        if (error.error.detail) {
-          errorMessage = error.error.detail;
-        }
+      const problemDetails = error.error as { title?: string; detail?: string } | null;
+      if (problemDetails?.detail) {
+        errorMessage = problemDetails.detail;
+      } else if (problemDetails?.title) {
+        errorMessage = problemDetails.title;
       } else if (error.message) {
         errorMessage = error.message;
       }
 
       toastService.error(errorMessage);
       return throwError(() => error);
-    })
+    }),
   );
 };

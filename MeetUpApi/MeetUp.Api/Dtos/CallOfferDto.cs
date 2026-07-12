@@ -5,7 +5,7 @@
         public string From { get; set; }
         public string To { get; set; }
         public string RoomId { get; set; }
-        public object Offer { get; set; }
+        public SessionDescriptionDto Offer { get; set; }
         public string? FromUsername { get; set; }
         public string? ToUsername { get; set; }
 
@@ -13,12 +13,12 @@
             From = string.Empty;
             To = string.Empty;
             RoomId = string.Empty;
-            Offer = new { };
+            Offer = new SessionDescriptionDto();
         }
 
         public override string ToString()
         {
-            return $"{From} - {To} - {RoomId} - {Offer ?? "NULL"}";
+            return $"{From} - {To} - {RoomId} - {Offer?.Type ?? "NULL"}";
         }
 
 
