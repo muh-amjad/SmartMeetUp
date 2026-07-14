@@ -7,6 +7,7 @@ namespace MeetUp.Api.Data
     public class AppDbContext : IdentityDbContext<ApplicationUser>
     {
         public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+        public DbSet<Meeting> Meetings => Set<Meeting>();
 
         public AppDbContext(DbContextOptions<AppDbContext> options)
             : base(options)
@@ -40,6 +41,34 @@ namespace MeetUp.Api.Data
                     .WithMany()
                     .HasForeignKey(token => token.UserId)
                     .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            builder.Entity<Meeting>(entity =>
+            {
+                entity.HasKey(m => m.Id);
+            
+                entity.Property(m => m.HostUserId)
+                    .IsRequired();
+            
+                entity.Property(m => m.Title)
+                    .HasMaxLength(200)
+                    .IsRequired();
+            
+                entity.Property(m => m.LiveKitRoomName)
+                    .HasMaxLength(100)
+                    .IsRequired();
+            
+                // Room name must be unique — LiveKit uses it as the room identifier
+                entity.HasIndex(m => m.LiveKitRoomName)
+                    .IsUnique();
+            
+                // Fast lookup: "all meetings hosted by user X, ordered by date"
+                entity.HasIndex(m => new { m.HostUserId, m.CreatedUtc });
+            
+                entity.HasOne(m => m.Host)
+                    .WithMany()
+                    .HasForeignKey(m => m.HostUserId)
+                    .OnDelete(DeleteBehavior.Restrict);  // host delete ho jaye toh meetings preserve rahengi
             });
         }
     }

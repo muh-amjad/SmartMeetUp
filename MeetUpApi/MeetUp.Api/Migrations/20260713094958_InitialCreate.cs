@@ -162,6 +162,35 @@ namespace MeetUp.Api.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "Meetings",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    HostUserId = table.Column<string>(type: "text", nullable: false),
+                    Title = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                    ScheduledStartUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    ActualStartUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    EndedUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    Status = table.Column<int>(type: "integer", nullable: false),
+                    LiveKitRoomName = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
+                    EgressId = table.Column<string>(type: "text", nullable: true),
+                    RecordingBlobKey = table.Column<string>(type: "text", nullable: true),
+                    RecordingDurationSeconds = table.Column<int>(type: "integer", nullable: true),
+                    CreatedUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Meetings", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_Meetings_AspNetUsers_HostUserId",
+                        column: x => x.HostUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "RefreshTokens",
                 columns: table => new
                 {
@@ -221,6 +250,17 @@ namespace MeetUp.Api.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_Meetings_HostUserId_CreatedUtc",
+                table: "Meetings",
+                columns: new[] { "HostUserId", "CreatedUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Meetings_LiveKitRoomName",
+                table: "Meetings",
+                column: "LiveKitRoomName",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_RefreshTokens_Token",
                 table: "RefreshTokens",
                 column: "Token",
@@ -249,6 +289,9 @@ namespace MeetUp.Api.Migrations
 
             migrationBuilder.DropTable(
                 name: "AspNetUserTokens");
+
+            migrationBuilder.DropTable(
+                name: "Meetings");
 
             migrationBuilder.DropTable(
                 name: "RefreshTokens");

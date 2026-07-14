@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MeetUp.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260623070036_InitialCreate")]
+    [Migration("20260713094958_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -93,6 +93,63 @@ namespace MeetUp.Api.Migrations
                         .HasDatabaseName("UserNameIndex");
 
                     b.ToTable("AspNetUsers", (string)null);
+                });
+
+            modelBuilder.Entity("MeetUp.Api.Entities.Meeting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ActualStartUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EgressId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("EndedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("HostUserId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("LiveKitRoomName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("RecordingBlobKey")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("RecordingDurationSeconds")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ScheduledStartUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LiveKitRoomName")
+                        .IsUnique();
+
+                    b.HasIndex("HostUserId", "CreatedUtc");
+
+                    b.ToTable("Meetings");
                 });
 
             modelBuilder.Entity("MeetUp.Api.Entities.RefreshToken", b =>
@@ -259,6 +316,17 @@ namespace MeetUp.Api.Migrations
                     b.HasKey("UserId", "LoginProvider", "Name");
 
                     b.ToTable("AspNetUserTokens", (string)null);
+                });
+
+            modelBuilder.Entity("MeetUp.Api.Entities.Meeting", b =>
+                {
+                    b.HasOne("MeetUp.Api.Entities.ApplicationUser", "Host")
+                        .WithMany()
+                        .HasForeignKey("HostUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Host");
                 });
 
             modelBuilder.Entity("MeetUp.Api.Entities.RefreshToken", b =>

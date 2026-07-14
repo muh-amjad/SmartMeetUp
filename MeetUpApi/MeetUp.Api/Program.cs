@@ -41,6 +41,7 @@ namespace MeetUp.Api
 
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
             builder.Services.Configure<MeetingOptions>(builder.Configuration.GetSection(MeetingOptions.Section));
+            builder.Services.Configure<LiveKitOptions>(builder.Configuration.GetSection(LiveKitOptions.SectionName));
 
             builder.Services.AddDbContext<AppDbContext>(options =>
                 options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -60,9 +61,11 @@ namespace MeetUp.Api
 
             builder.Services.AddScoped<IUserRepository, UserRepository>();
             builder.Services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
+            builder.Services.AddScoped<IMeetingRepository, MeetingRepository>();
+
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
-
+            builder.Services.AddSingleton<ILiveKitService, LiveKitService>();
             // Register FluentValidation validators
             builder.Services.AddValidatorsFromAssemblyContaining<Program>(includeInternalTypes: true);
 
@@ -100,7 +103,7 @@ namespace MeetUp.Api
                             var path = context.HttpContext.Request.Path;
 
                             if (!string.IsNullOrWhiteSpace(accessToken)
-                                && path.StartsWithSegments("/callHub", StringComparison.OrdinalIgnoreCase))
+                                && path.StartsWithSegments("/meetingHub", StringComparison.OrdinalIgnoreCase))
                             {
                                 context.Token = accessToken;
                             }
@@ -113,7 +116,41 @@ namespace MeetUp.Api
             builder.Services.AddAuthorization();
             builder.Services.AddControllers();
             builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+            builder.Services.AddSwaggerGen(options =>
+            {
+                options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+                {
+                    Title = "MeetUp API",
+                    Version = "v1",
+                });
+
+                // JWT Bearer scheme — Swagger UI ke top pe "Authorize" button add karega
+                options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+                {
+                    Name = "Authorization",
+                    Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+                    Scheme = "bearer",
+                    BearerFormat = "JWT",
+                    In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+                    Description = "Paste ONLY the JWT token here (no 'Bearer ' prefix — Swagger adds it).",
+                });
+
+                // Har request pe ye scheme apply karo
+                options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+                {
+                    {
+                        new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+                        {
+                            Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                            {
+                                Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                                Id = "Bearer",
+                            },
+                        },
+                        Array.Empty<string>()
+                    }
+                });
+            });
 
             builder.Services.AddCors(options =>
             {
@@ -146,7 +183,7 @@ namespace MeetUp.Api
             app.UseAuthorization();
 
             app.MapControllers();
-            app.MapHub<Hubs.CallHub>("/callHub");
+            app.MapHub<Hubs.MeetingHub>("/meetingHub");
             app.MapHealthChecks("/health/live");
             app.MapHealthChecks("/health/ready");
 
