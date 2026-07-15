@@ -178,7 +178,14 @@ namespace MeetUp.Api
                 app.UseSwaggerUI();
             }
 
-            app.UseHttpsRedirection();
+            // HTTPS redirect only in non-dev. In dev, HTTP webhooks from LiveKit
+            // (docker container) can't follow redirects to our self-signed HTTPS cert.
+            // Production Caddy already handles TLS in front of the API.
+            if (!app.Environment.IsDevelopment())
+            {
+                app.UseHttpsRedirection();
+            }
+
             app.UseAuthentication();
             app.UseAuthorization();
 
