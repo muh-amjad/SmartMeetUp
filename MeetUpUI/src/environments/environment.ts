@@ -1,5 +1,5 @@
 export const environment = {
   production: true,
-  apiBaseUrl: 'https://api.meetup.app',
-  signalrHubUrl: 'https://api.meetup.app/callHub'
+  apiBaseUrl: 'https://smartmeetup.is-a.dev',
+  signalrHubUrl: 'https://smartmeetup.is-a.dev/meetingHub'
 };

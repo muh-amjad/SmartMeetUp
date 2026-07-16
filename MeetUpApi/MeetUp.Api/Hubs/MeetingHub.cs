@@ -168,4 +168,38 @@ public class MeetingHub : Hub
     {
         return Clients.All.SendAsync("UserJoined", _presenceTracker.GetAllUsers());
     }
+
+    /// <summary>
+    /// Called by the client when they successfully join a LiveKit room, so other
+    /// users see their status change to "in a call".
+    /// </summary>
+    public async Task SetInCall(string meetingId)
+    {
+        if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var user))
+        {
+            return;
+        }
+
+        user.IsInCall = true;
+        user.RoomId = meetingId;
+        _presenceTracker.UpsertUser(user);
+        await BroadcastUsersAsync();
+    }
+
+    /// <summary>
+    /// Called by the client when they leave the meeting so others see them as
+    /// available again.
+    /// </summary>
+    public async Task SetLeftCall()
+    {
+        if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var user))
+        {
+            return;
+        }
+
+        user.IsInCall = false;
+        user.RoomId = null;
+        _presenceTracker.UpsertUser(user);
+        await BroadcastUsersAsync();
+    }
 }

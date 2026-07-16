@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "ng serve",
+    "start": "ng serve --open",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
@@ -38,6 +38,7 @@
     "@ngrx/store": "^21.0.1",
     "@ngrx/store-devtools": "^21.0.1",
     "gsap": "^3.13.0",
+    "livekit-client": "^2.20.1",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

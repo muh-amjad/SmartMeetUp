@@ -8,7 +8,9 @@
 
     <div class="header-actions">
       @if (dashboardMode() === 'dashboard') {
-        <button type="button" class="primary" (click)="startInstantMeeting()">Instant Meeting</button>
+        <button type="button" class="primary" (click)="startInstantMeeting()">
+          Instant Meeting
+        </button>
       }
       @if (dashboardMode() === 'call') {
         <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
@@ -18,7 +20,7 @@
     </div>
   </header>
 
-  @if (incomingCall(); as incoming) {
+  @if (incomingInvite(); as incoming) {
     <div class="incoming-call-banner">
       <span>{{ incoming.fromUsername }} is calling...</span>
       <div class="incoming-actions">
@@ -54,7 +56,11 @@
             </span>
           </div>
 
-          <button type="button" (click)="callSearchedUser(result)" [disabled]="!result.isOnline || !result.connectionId">
+          <button
+            type="button"
+            (click)="callSearchedUser(result)"
+            [disabled]="!result.isOnline || !result.connectionId"
+          >
             Call
           </button>
         </div>
@@ -68,10 +74,13 @@
         <article class="dashboard-hero">
           <h2>Start conversations in one click</h2>
           <p>
-            Use Instant Meeting for quick calls or call online teammates directly from the user panel.
+            Use Instant Meeting for quick calls or call online teammates directly from the user
+            panel.
           </p>
           <div class="hero-actions">
-            <button type="button" class="primary" (click)="startInstantMeeting()">Start Instant Meeting</button>
+            <button type="button" class="primary" (click)="startInstantMeeting()">
+              Start Instant Meeting
+            </button>
           </div>
         </article>
       }
@@ -82,23 +91,34 @@
             <p class="media-error">{{ mediaError() }}</p>
           }
 
-          <div class="remote-grid" [class.empty-grid]="!remoteVideos().length">
-            @if (!remoteVideos().length) {
+          <div class="remote-grid" [class.empty-grid]="!remoteParticipants().length">
+            @if (!remoteParticipants().length) {
               <article class="waiting-card">
                 <h3>Waiting for participants</h3>
                 <p>Invite online users from the right panel to join your room.</p>
               </article>
             }
 
-            @for (remote of remoteVideos(); track trackByRemoteId($index, remote)) {
+            @for (
+              participant of remoteParticipants();
+              track trackByParticipantId($index, participant)
+            ) {
               <article class="remote-tile">
-                <video [srcObject]="remote.stream" autoplay playsinline [class.video-hidden]="!remote.isCameraOn"></video>
-                @if (!remote.isCameraOn) {
+                <video
+                  [srcObject]="getRemoteVideoStream(participant)"
+                  autoplay
+                  playsinline
+                  [class.video-hidden]="!isRemoteCameraOn(participant)"
+                ></video>
+                @if (!isRemoteCameraOn(participant)) {
                   <div class="remote-camera-off">Camera Off</div>
                 }
-                <span class="remote-label">{{ remote.username }}</span>
-                <span class="remote-mic-status" [class.remote-mic-off]="!remote.isMicOn">
-                  {{ remote.isMicOn ? 'Mic On' : 'Mic Off' }}
+                <span class="remote-label">{{ getParticipantName(participant) }}</span>
+                <span
+                  class="remote-mic-status"
+                  [class.remote-mic-off]="!isRemoteMicOn(participant)"
+                >
+                  {{ isRemoteMicOn(participant) ? 'Mic On' : 'Mic Off' }}
                 </span>
               </article>
             }
@@ -110,6 +130,9 @@
           </article>
         </section>
 
+        @if (isRecording()) {
+          <div class="recording-indicator">● REC</div>
+        }
         <div class="meeting-controls">
           <button type="button" class="secondary" (click)="toggleCamera()">
             {{ isCameraOn ? 'Camera Off' : 'Camera On' }}

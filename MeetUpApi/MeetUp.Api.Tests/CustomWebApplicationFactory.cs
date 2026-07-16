@@ -28,6 +28,14 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
                 ["Jwt:Issuer"] = "https://api.meetup.test",
                 ["Jwt:Audience"] = "https://meetup.test",
                 ["Jwt:ExpiresMinutes"] = "180",
+
+                // LiveKit test values — dummy but valid. CreateRoomAsync will fail
+                // (no LiveKit container in tests) but MeetingsController swallows that
+                // exception, so tests still get 200 responses with valid tokens.
+                ["LiveKit:ApiKey"] = "test-api-key",
+                ["LiveKit:ApiSecret"] = "test-api-secret-must-be-32-chars-long-for-hmac-signing",
+                ["LiveKit:WsUrl"] = "ws://localhost:7880",
+                ["LiveKit:HttpUrl"] = "http://localhost:7880",
             });
         });
 

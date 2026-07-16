@@ -18,335 +18,205 @@ public class MeetingHubTests : IClassFixture<CustomWebApplicationFactory>
         _client = factory.CreateClient();
     }
 
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task Online_User_Search_And_Call_Initiation_Should_Work()
+    [Fact]
+    public async Task JoinUser_Broadcasts_User_List_To_All_Connected_Clients()
     {
-        var caller = await CreateUser("caller-init");
-        var callee = await CreateUser("callee-init");
+        var user1 = await CreateUser("presence-a");
+        var user2 = await CreateUser("presence-b");
 
-        var calleeIncomingCall = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var user2UsersReceived = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await using var calleeHub = BuildHubConnection(callee.Token);
-        calleeHub.On<JsonElement>("ReceiveInvite", payload =>
+        await using var hub1 = BuildHubConnection(user1.Token);
+        await using var hub2 = BuildHubConnection(user2.Token);
+
+        hub2.On<JsonElement>("UserJoined", payload =>
         {
-            calleeIncomingCall.TrySetResult(payload.Clone());
+            // Wait until we can see both users in the presence list
+            var users = payload.EnumerateArray().ToList();
+            if (users.Count >= 2)
+            {
+                user2UsersReceived.TrySetResult(payload.Clone());
+            }
         });
 
-        await StartAndJoin(calleeHub);
+        await StartAndJoin(hub1);
+        await StartAndJoin(hub2);
 
-        var searchRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/users/search?query={Uri.EscapeDataString(callee.Username)}");
-        searchRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", caller.Token);
-        var searchResponse = await _client.SendAsync(searchRequest);
-        searchResponse.EnsureSuccessStatusCode();
-
-        var searchJson = await searchResponse.Content.ReadAsStringAsync();
-        using var searchDocument = JsonDocument.Parse(searchJson);
-        var firstResult = searchDocument.RootElement.EnumerateArray().First();
-        Assert.True(firstResult.GetProperty("isOnline").GetBoolean());
-        var calleeConnectionId = firstResult.GetProperty("connectionId").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(calleeConnectionId));
-
-        await using var callerHub = BuildHubConnection(caller.Token);
-        await StartAndJoin(callerHub);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeConnectionId!);
-
-        var incomingPayload = await AwaitWithTimeout(calleeIncomingCall.Task, "Callee did not receive incoming call event.");
-        Assert.Equal(caller.Username, incomingPayload.GetProperty("fromUsername").GetString());
+        var payload = await AwaitWithTimeout(user2UsersReceived.Task, "hub2 did not see hub1 in the presence list.");
+        var usernames = payload.EnumerateArray()
+            .Select(u => u.GetProperty("username").GetString())
+            .ToList();
+        Assert.Contains(user1.Username, usernames);
+        Assert.Contains(user2.Username, usernames);
     }
 
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task Declining_Call_Should_Notify_Caller()
+    [Fact]
+    public async Task InviteToMeeting_Delivers_ReceiveInvite_To_Callee()
+    {
+        var caller = await CreateUser("caller-invite");
+        var callee = await CreateUser("callee-invite");
+
+        var calleeIncoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var callerHub = BuildHubConnection(caller.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => calleeIncoming.TrySetResult(payload.Clone()));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+
+        var invite = await AwaitWithTimeout(calleeIncoming.Task, "Callee did not receive invite.");
+        Assert.Equal(caller.Username, invite.GetProperty("fromUsername").GetString());
+        Assert.Equal(meetingId, invite.GetProperty("meetingId").GetString(),
+            ignoreCase: true);
+    }
+
+    [Fact]
+    public async Task Declining_Invite_Notifies_Caller()
     {
         var caller = await CreateUser("caller-decline");
         var callee = await CreateUser("callee-decline");
 
-        var incomingCall = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var InviteDeclined = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var declined = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var callerHub = BuildHubConnection(caller.Token);
         await using var calleeHub = BuildHubConnection(callee.Token);
 
-        callerHub.On<JsonElement>("InviteDeclined", payload => InviteDeclined.TrySetResult(payload.Clone()));
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingCall.TrySetResult(payload.Clone()));
+        callerHub.On<JsonElement>("InviteDeclined", payload => declined.TrySetResult(payload.Clone()));
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
 
         await StartAndJoin(callerHub);
         await StartAndJoin(calleeHub);
 
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var incomingPayload = await AwaitWithTimeout(incomingCall.Task, "Callee did not receive incoming call.");
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
 
-        var inviteId = incomingPayload.GetProperty("inviteId").GetString();
+        var invite = await AwaitWithTimeout(incoming.Task, "Callee did not receive invite.");
+        var inviteId = invite.GetProperty("inviteId").GetString();
         Assert.False(string.IsNullOrWhiteSpace(inviteId));
 
         await calleeHub.InvokeAsync("RespondToInvite", inviteId!, false);
 
-        var declinedPayload = await AwaitWithTimeout(InviteDeclined.Task, "Caller did not receive call declined event.");
-        Assert.Equal(callee.Username, declinedPayload.GetProperty("declinedByUsername").GetString());
+        var payload = await AwaitWithTimeout(declined.Task, "Caller did not receive InviteDeclined.");
+        Assert.Equal(callee.Username, payload.GetProperty("declinedByUsername").GetString());
     }
 
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task Accepting_Call_Should_Notify_Both_And_Set_User_State()
+    [Fact]
+    public async Task Accepting_Invite_Notifies_Both_Parties()
     {
         var caller = await CreateUser("caller-accept");
         var callee = await CreateUser("callee-accept");
 
-        var incomingCall = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         var callerAccepted = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calleeAccepted = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var callerHub = BuildHubConnection(caller.Token);
         await using var calleeHub = BuildHubConnection(callee.Token);
 
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingCall.TrySetResult(payload.Clone()));
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
         callerHub.On<JsonElement>("InviteAccepted", payload => callerAccepted.TrySetResult(payload.Clone()));
         calleeHub.On<JsonElement>("InviteAccepted", payload => calleeAccepted.TrySetResult(payload.Clone()));
 
         await StartAndJoin(callerHub);
         await StartAndJoin(calleeHub);
 
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var incomingPayload = await AwaitWithTimeout(incomingCall.Task, "Callee did not receive incoming call.");
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+        var invite = await AwaitWithTimeout(incoming.Task, "Callee did not receive invite.");
 
-        await calleeHub.InvokeAsync("RespondToInvite", incomingPayload.GetProperty("inviteId").GetString()!, true);
-
-        var callerAcceptedPayload = await AwaitWithTimeout(callerAccepted.Task, "Caller did not receive call accepted event.");
-        var calleeAcceptedPayload = await AwaitWithTimeout(calleeAccepted.Task, "Callee did not receive call accepted event.");
-
-        var callerRoom = callerAcceptedPayload.GetProperty("roomId").GetString();
-        var calleeRoom = calleeAcceptedPayload.GetProperty("roomId").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(callerRoom));
-        Assert.Equal(callerRoom, calleeRoom);
-
-        var users = callerAcceptedPayload.GetProperty("users").EnumerateArray().ToList();
-        Assert.Equal(2, users.Count);
-
-        var calleeInRoom = users.First(user =>
-            string.Equals(user.GetProperty("id").GetString(), calleeHub.ConnectionId, StringComparison.Ordinal));
-
-        Assert.True(calleeInRoom.GetProperty("isInCall").GetBoolean());
-        Assert.Equal(callerRoom, calleeInRoom.GetProperty("roomId").GetString());
-    }
-
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task Leaving_Call_Should_Allow_Recalling_Same_User()
-    {
-        var caller = await CreateUser("caller-recall");
-        var callee = await CreateUser("callee-recall");
-
-        var incomingCall1 = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var incomingCall2 = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var callerHub = BuildHubConnection(caller.Token);
-        await using var calleeHub = BuildHubConnection(callee.Token);
-
-        var incomingCallCount = 0;
-        calleeHub.On<JsonElement>("ReceiveInvite", payload =>
-        {
-            incomingCallCount++;
-            if (incomingCallCount == 1)
-            {
-                incomingCall1.TrySetResult(payload.Clone());
-                return;
-            }
-
-            incomingCall2.TrySetResult(payload.Clone());
-        });
-
-        await StartAndJoin(callerHub);
-        await StartAndJoin(calleeHub);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var firstIncoming = await AwaitWithTimeout(incomingCall1.Task, "First incoming call was not received.");
-        await calleeHub.InvokeAsync("RespondToInvite", firstIncoming.GetProperty("inviteId").GetString()!, true);
-
-        await Task.Delay(200);
-        await calleeHub.InvokeAsync("LeaveCall");
-        await Task.Delay(200);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var secondIncoming = await AwaitWithTimeout(incomingCall2.Task, "Second incoming call was not received after leave.");
-
-        Assert.NotEqual(firstIncoming.GetProperty("inviteId").GetString(), secondIncoming.GetProperty("inviteId").GetString());
-    }
-
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task Calling_Busy_User_Should_Return_CallFailed()
-    {
-        var caller = await CreateUser("caller-busy");
-        var callee = await CreateUser("callee-busy");
-        var third = await CreateUser("third-busy");
-
-        var incomingCall = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thirdCallFailed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var callerHub = BuildHubConnection(caller.Token);
-        await using var calleeHub = BuildHubConnection(callee.Token);
-        await using var thirdHub = BuildHubConnection(third.Token);
-
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingCall.TrySetResult(payload.Clone()));
-        thirdHub.On<string>("CallFailed", message => thirdCallFailed.TrySetResult(message));
-
-        await StartAndJoin(callerHub);
-        await StartAndJoin(calleeHub);
-        await StartAndJoin(thirdHub);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var firstIncoming = await AwaitWithTimeout(incomingCall.Task, "Callee did not receive first incoming call.");
-        await calleeHub.InvokeAsync("RespondToInvite", firstIncoming.GetProperty("inviteId").GetString()!, true);
-
-        await Task.Delay(200);
-        await thirdHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-
-        var failureMessage = await AwaitWithTimeout(thirdCallFailed.Task, "Third user did not receive call failed message.");
-        Assert.Contains("already in another call", failureMessage, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task RoomParticipantsUpdated_Should_Include_All_Joined_Users_And_Reflect_Leave()
-    {
-        var caller = await CreateUser("caller-room");
-        var callee = await CreateUser("callee-room");
-        var third = await CreateUser("third-room");
-
-        var incomingToCallee = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var incomingToThird = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var callerRoomUpdated = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var callerHub = BuildHubConnection(caller.Token);
-        await using var calleeHub = BuildHubConnection(callee.Token);
-        await using var thirdHub = BuildHubConnection(third.Token);
-
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingToCallee.TrySetResult(payload.Clone()));
-        thirdHub.On<JsonElement>("ReceiveInvite", payload => incomingToThird.TrySetResult(payload.Clone()));
-        callerHub.On<JsonElement>("RoomParticipantsUpdated", payload =>
-        {
-            var users = payload.GetProperty("users").EnumerateArray().ToList();
-            if (users.Count == 3)
-            {
-                callerRoomUpdated.TrySetResult(payload.Clone());
-            }
-        });
-
-        await StartAndJoin(callerHub);
-        await StartAndJoin(calleeHub);
-        await StartAndJoin(thirdHub);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var inviteForCallee = await AwaitWithTimeout(incomingToCallee.Task, "Callee did not receive incoming call.");
-        await calleeHub.InvokeAsync("RespondToInvite", inviteForCallee.GetProperty("inviteId").GetString()!, true);
-
-        await callerHub.InvokeAsync("InviteToMeeting", thirdHub.ConnectionId);
-        var inviteForThird = await AwaitWithTimeout(incomingToThird.Task, "Third user did not receive incoming call.");
-        await thirdHub.InvokeAsync("RespondToInvite", inviteForThird.GetProperty("inviteId").GetString()!, true);
-
-        var roomWithThree = await AwaitWithTimeout(callerRoomUpdated.Task, "Room participants update with all users was not received.");
-        var threeUsers = roomWithThree.GetProperty("users").EnumerateArray().ToList();
-        Assert.Equal(3, threeUsers.Count);
-
-        var roomId = roomWithThree.GetProperty("roomId").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(roomId));
-
-        var callerRoomAfterLeave = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        callerHub.On<JsonElement>("RoomParticipantsUpdated", payload =>
-        {
-            if (!string.Equals(payload.GetProperty("roomId").GetString(), roomId, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            var users = payload.GetProperty("users").EnumerateArray().ToList();
-            if (users.Count == 2)
-            {
-                callerRoomAfterLeave.TrySetResult(payload.Clone());
-            }
-        });
-
-        await thirdHub.InvokeAsync("LeaveCall");
-        var roomWithTwo = await AwaitWithTimeout(callerRoomAfterLeave.Task, "Room participants update after leave was not received.");
-
-        var remainingUsers = roomWithTwo.GetProperty("users").EnumerateArray().ToList();
-        Assert.Equal(2, remainingUsers.Count);
-        Assert.DoesNotContain(remainingUsers, user => string.Equals(user.GetProperty("id").GetString(), thirdHub.ConnectionId, StringComparison.Ordinal));
-    }
-
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task User_Can_Reconnect_After_EndCall_And_Be_Called_Again()
-    {
-        var caller = await CreateUser("caller-reconnect");
-        var callee = await CreateUser("callee-reconnect");
-
-        var incomingFirst = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var callerHub = BuildHubConnection(caller.Token);
-        await using var calleeHub = BuildHubConnection(callee.Token);
-
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingFirst.TrySetResult(payload.Clone()));
-
-        await StartAndJoin(callerHub);
-        await StartAndJoin(calleeHub);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var firstInvite = await AwaitWithTimeout(incomingFirst.Task, "First incoming call was not received.");
-        await calleeHub.InvokeAsync("RespondToInvite", firstInvite.GetProperty("inviteId").GetString()!, true);
-
-        await calleeHub.InvokeAsync("LeaveCall");
-        await callerHub.InvokeAsync("LeaveCall");
-
-        await calleeHub.StopAsync();
-        await calleeHub.StartAsync();
-        await calleeHub.InvokeAsync("JoinUser");
-
-        var incomingSecond = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingSecond.TrySetResult(payload.Clone()));
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var secondInvite = await AwaitWithTimeout(incomingSecond.Task, "Incoming call after reconnect was not received.");
-
-        Assert.NotEqual(firstInvite.GetProperty("inviteId").GetString(), secondInvite.GetProperty("inviteId").GetString());
-        Assert.Equal(callerHub.ConnectionId, secondInvite.GetProperty("fromUserId").GetString());
-    }
-
-    [Fact(Skip = "Refactoring for Phase 1 — will restore after MeetingsController + hub integration test")]
-    public async Task Media_State_Updates_Should_Be_Broadcast_To_Room_Participants()
-    {
-        var caller = await CreateUser("caller-media");
-        var callee = await CreateUser("callee-media");
-
-        var incomingCall = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var callerMediaUpdate = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var callerHub = BuildHubConnection(caller.Token);
-        await using var calleeHub = BuildHubConnection(callee.Token);
-
-        calleeHub.On<JsonElement>("ReceiveInvite", payload => incomingCall.TrySetResult(payload.Clone()));
-        callerHub.On<JsonElement>("MediaStateUpdated", payload =>
-        {
-            if (string.Equals(payload.GetProperty("userId").GetString(), calleeHub.ConnectionId, StringComparison.Ordinal))
-            {
-                callerMediaUpdate.TrySetResult(payload.Clone());
-            }
-        });
-
-        await StartAndJoin(callerHub);
-        await StartAndJoin(calleeHub);
-
-        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId);
-        var invite = await AwaitWithTimeout(incomingCall.Task, "Callee did not receive incoming call.");
         await calleeHub.InvokeAsync("RespondToInvite", invite.GetProperty("inviteId").GetString()!, true);
 
-        var roomId = invite.GetProperty("roomId").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(roomId));
+        var callerPayload = await AwaitWithTimeout(callerAccepted.Task, "Caller did not receive InviteAccepted.");
+        var calleePayload = await AwaitWithTimeout(calleeAccepted.Task, "Callee did not receive InviteAccepted.");
 
-        await calleeHub.InvokeAsync("UpdateMediaState", roomId!, false, false);
-
-        var mediaPayload = await AwaitWithTimeout(callerMediaUpdate.Task, "Caller did not receive media state update.");
-        Assert.Equal(roomId, mediaPayload.GetProperty("roomId").GetString());
-        Assert.Equal(calleeHub.ConnectionId, mediaPayload.GetProperty("userId").GetString());
-        Assert.False(mediaPayload.GetProperty("isCameraOn").GetBoolean());
-        Assert.False(mediaPayload.GetProperty("isMicOn").GetBoolean());
+        // Both sides get the same meetingId back
+        Assert.Equal(meetingId, callerPayload.GetProperty("meetingId").GetString(), ignoreCase: true);
+        Assert.Equal(meetingId, calleePayload.GetProperty("meetingId").GetString(), ignoreCase: true);
+        Assert.Equal(callee.Username, callerPayload.GetProperty("acceptedByUsername").GetString());
     }
 
+    [Fact]
+    public async Task SetInCall_Then_SetLeftCall_Broadcast_Updated_Presence()
+    {
+        var observer = await CreateUser("observer");
+        var active = await CreateUser("active-user");
+
+        await using var observerHub = BuildHubConnection(observer.Token);
+        await using var activeHub = BuildHubConnection(active.Token);
+
+        var sawInCall = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sawAvailable = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        observerHub.On<JsonElement>("UserJoined", payload =>
+        {
+            var activeEntry = payload.EnumerateArray()
+                .FirstOrDefault(u => string.Equals(
+                    u.GetProperty("username").GetString(), active.Username, StringComparison.Ordinal));
+
+            if (activeEntry.ValueKind == JsonValueKind.Object)
+            {
+                var isInCall = activeEntry.GetProperty("isInCall").GetBoolean();
+                if (isInCall) sawInCall.TrySetResult(payload.Clone());
+                else if (sawInCall.Task.IsCompleted) sawAvailable.TrySetResult(payload.Clone());
+            }
+        });
+
+        await StartAndJoin(observerHub);
+        await StartAndJoin(activeHub);
+
+        var meetingId = await CreateMeeting(active.Token);
+        await activeHub.InvokeAsync("SetInCall", meetingId);
+        await AwaitWithTimeout(sawInCall.Task, "Observer did not see active-user as InCall.");
+
+        await activeHub.InvokeAsync("SetLeftCall");
+        await AwaitWithTimeout(sawAvailable.Task, "Observer did not see active-user return to Available.");
+    }
+
+    [Fact]
+    public async Task MeetingsApi_Create_Returns_LiveKit_Token()
+    {
+        var host = await CreateUser("meet-host");
+
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/meetings")
+        {
+            Content = JsonContent.Create(new { title = "Smoke test" }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", host.Token);
+
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("meetingId").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("livekitToken").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("livekitWsUrl").GetString()));
+        Assert.StartsWith("meeting-", root.GetProperty("roomName").GetString());
+    }
+
+    // ────────────── helpers ──────────────
+
+    private async Task<string> CreateMeeting(string bearerToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/meetings")
+        {
+            Content = JsonContent.Create(new { title = "Test meeting" }),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return doc.RootElement.GetProperty("meetingId").GetString()!;
+    }
 
     private async Task StartAndJoin(HubConnection connection)
     {
@@ -377,7 +247,7 @@ public class MeetingHubTests : IClassFixture<CustomWebApplicationFactory>
         {
             Username = username,
             Email = email,
-            Password = "Password123!"
+            Password = "Password123!",
         });
 
         signupResponse.EnsureSuccessStatusCode();

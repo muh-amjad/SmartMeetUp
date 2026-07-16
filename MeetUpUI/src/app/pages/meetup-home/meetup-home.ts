@@ -3,27 +3,27 @@ import {
   AfterViewInit,
   ChangeDetectionStrategy,
   Component,
-  ElementRef,
-  OnDestroy,
-  OnInit,
-  ViewChild,
   computed,
   effect,
+  ElementRef,
   inject,
+  OnDestroy,
+  OnInit,
   signal,
+  ViewChild,
 } from '@angular/core';
 import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { gsap } from 'gsap';
+import { firstValueFrom } from 'rxjs';
 import { UserSearchResultDto } from '../../dtos/user-search-result.dto';
 import { UserDto } from '../../dtos/user.dto';
 import { User } from '../../models/user.model';
 import { AuthService } from '../../services/auth.service';
-import { MeetingMediaService } from '../../services/meeting-media.service';
+import { LivekitMeetingService } from '../../services/livekit-meeting.service';
+import { MeetingApiService } from '../../services/meeting-api.service';
 import { SignalrService } from '../../services/signalr.service';
 import { UserDirectoryService } from '../../services/user-directory.service';
-import { WebrtcPeerService } from '../../services/webrtc-peer.service';
-import { CallFacade } from '../../store/facades/call.facade';
 import { UsersFacade } from '../../store/facades/users.facade';
 
 @Component({
@@ -36,12 +36,11 @@ import { UsersFacade } from '../../store/facades/users.facade';
 })
 export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   private readonly usersFacade = inject(UsersFacade);
-  private readonly callFacade = inject(CallFacade);
   private readonly signalRService = inject(SignalrService);
   private readonly authService = inject(AuthService);
-  private readonly meetingMediaService = inject(MeetingMediaService);
   private readonly userDirectoryService = inject(UserDirectoryService);
-  private readonly peerService = inject(WebrtcPeerService);
+  private readonly livekit = inject(LivekitMeetingService);
+  private readonly meetingApi = inject(MeetingApiService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(FormBuilder);
@@ -57,19 +56,27 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   readonly currentUsername = computed(() => this.authService.currentUser()?.username ?? '');
   readonly currentEmail = computed(() => this.authService.currentUser()?.email ?? '');
 
-  readonly currentRoomId = signal<string | null>(null);
   readonly currentUserConnectionId = signal('');
 
-  readonly incomingCall = signal<{ inviteId: string; roomId: string; fromUserId: string; fromUsername: string } | null>(
-    null,
-  );
+  readonly incomingInvite = signal<{
+    inviteId: string;
+    meetingId: string;
+    fromUserId: string;
+    fromUsername: string;
+  } | null>(null);
+
   readonly ringingMessage = signal('');
   readonly searchResults = signal<UserSearchResultDto[]>([]);
   readonly searching = signal(false);
-  readonly searchMessage = signal('Search by username or email to find someone and call if online.');
+  readonly searchMessage = signal(
+    'Search by username or email to find someone and call if online.',
+  );
 
-  /** Remote videos are owned by the WebRTC peer service. */
-  readonly remoteVideos = this.peerService.remoteVideos;
+  /** Reactive LiveKit state — passed straight through to the template. */
+  readonly remoteParticipants = this.livekit.remoteParticipants;
+  readonly localParticipant = this.livekit.localParticipant;
+  readonly currentMeetingId = this.livekit.currentMeetingId;
+  readonly isRecording = this.livekit.isRecording;
 
   readonly onlineUsers = computed(() => {
     const myConnectionId = this.currentUserConnectionId();
@@ -78,6 +85,8 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
 
   private isEndingCall = false;
 
+  private remoteStreamCache = new Map<string, { stream: MediaStream; trackId: string }>();
+
   @ViewChild('pageShell', { static: true })
   pageShellRef!: ElementRef<HTMLElement>;
 
@@ -85,20 +94,18 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   localVideoRef?: ElementRef<HTMLVideoElement>;
 
   constructor() {
+    // Re-attach local video element whenever LiveKit publishes a new local track.
     effect(() => {
-      const stream = this.meetingMediaService.localStream();
-      if (stream) {
-        void this.attachLocalPreview();
+      const lp = this.localParticipant();
+      const el = this.localVideoRef?.nativeElement;
+      if (lp && el) {
+        const track = lp
+          .getTrackPublications()
+          .find((pub) => pub.kind === 'video' && !pub.isMuted)?.videoTrack;
+        if (track) {
+          track.attach(el);
+        }
       }
-    });
-
-    this.peerService.configure({
-      sendOffer: (roomId, targetId, offer) => this.signalRService.sendCallOffer(roomId, targetId, offer),
-      sendAnswer: (roomId, targetId, answer) => this.signalRService.sendCallAnswer(roomId, targetId, answer),
-      sendIceCandidate: (roomId, targetId, candidate) =>
-        this.signalRService.sendIceCandidate(roomId, targetId, candidate),
-      resolveRemoteUsername: (remoteUserId) =>
-        this.allUsers().find((u) => u.id === remoteUserId)?.username ?? 'User',
     });
   }
 
@@ -112,21 +119,29 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     this.currentUserConnectionId.set(this.signalRService.connectionId);
 
     if (this.dashboardMode() === 'call') {
-      await this.ensureLocalMedia();
+      const meetingIdFromUrl = this.route.snapshot.paramMap.get('meetingId');
+      const state = history.state as { source?: string; meetingId?: string } | undefined;
+      const meetingId = meetingIdFromUrl ?? state?.meetingId;
 
-      const isPreviewJoin = history.state?.source === 'join-now';
-      const shouldStartInstantMeeting = isPreviewJoin && !history.state?.callAcceptedPayload;
-      if (shouldStartInstantMeeting) {
-        await this.signalRService.startInstantMeeting();
-      }
-
-      const acceptedPayload = (history.state?.callAcceptedPayload ?? null) as
-        | { roomId: string; users: User[] }
-        | null;
-
-      if (acceptedPayload?.roomId) {
-        this.currentRoomId.set(acceptedPayload.roomId);
-        await this.syncParticipants(acceptedPayload.users);
+      if (meetingId) {
+        try {
+          await this.livekit.joinMeeting(meetingId);
+          await this.signalRService.setInCall(meetingId);
+        } catch (err) {
+          this.mediaError.set('Could not join meeting. Please try again.');
+          console.error('joinMeeting failed', err);
+        }
+      } else if (state?.source === 'join-now') {
+        try {
+          const created = await firstValueFrom(this.meetingApi.create());
+          // Update URL so user can share/refresh
+          await this.router.navigate(['/meet', created.meetingId], { replaceUrl: true });
+          await this.livekit.joinMeeting(created.meetingId);
+          await this.signalRService.setInCall(created.meetingId);
+        } catch (err) {
+          this.mediaError.set('Could not start meeting.');
+          console.error('startInstantMeeting failed', err);
+        }
       }
     }
   }
@@ -140,24 +155,15 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       stagger: 0.1,
       ease: 'power3.out',
     });
-
-    if (this.dashboardMode() === 'call') {
-      void this.attachLocalPreview();
-    }
   }
 
   ngOnDestroy(): void {
-    if (this.dashboardMode() === 'call' && this.currentRoomId() && !this.isEndingCall) {
-      void this.signalRService.leaveCall();
+    if (this.dashboardMode() === 'call' && this.currentMeetingId() && !this.isEndingCall) {
+      void this.livekit.leaveMeeting();
+      void this.signalRService.setLeftCall();
     }
 
-    this.peerService.cleanupAll();
-    this.callFacade.updateCallState(false);
     this.signalRService.setCallbacks({});
-
-    if (this.dashboardMode() === 'call') {
-      this.meetingMediaService.stopStream();
-    }
   }
 
   async searchUsers(): Promise<void> {
@@ -173,7 +179,9 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       next: (results) => {
         this.searching.set(false);
         this.searchResults.set(results);
-        this.searchMessage.set(results.length ? `Found ${results.length} user(s).` : 'No users matched your search.');
+        this.searchMessage.set(
+          results.length ? `Found ${results.length} user(s).` : 'No users matched your search.',
+        );
       },
       error: () => {
         this.searching.set(false);
@@ -189,24 +197,55 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
-    this.callUser(new UserDto(result.username, result.connectionId, result.userId, result.email));
+    void this.callUser(
+      new UserDto(result.username, result.connectionId, result.userId, result.email),
+    );
   }
 
-  callUser(user: User): void {
-    this.ringingMessage.set(`Ringing ${user.username}...`);
-    void this.signalRService.startCall(user.id);
+  /**
+   * Start a call to another online user.
+   * 1. Create a meeting via REST (get meetingId + token for us).
+   * 2. Send an invite via SignalR (server routes it to the target's connection).
+   * 3. Join the LiveKit room ourselves so we're already there when they accept.
+   */
+  async callUser(user: User): Promise<void> {
+    try {
+      this.ringingMessage.set(`Ringing ${user.username}...`);
+      const meeting = await firstValueFrom(this.meetingApi.create());
+      await this.signalRService.inviteToMeeting(user.id, meeting.meetingId);
+
+      if (this.dashboardMode() === 'dashboard') {
+        // Move to the meeting page so we see our own video while ringing
+        await this.router.navigate(['/meet', meeting.meetingId]);
+      } else {
+        // Already in call mode — join directly
+        await this.livekit.joinMeeting(meeting.meetingId);
+        await this.signalRService.setInCall(meeting.meetingId);
+      }
+    } catch (err) {
+      this.ringingMessage.set('');
+      this.mediaError.set('Could not start the call.');
+      console.error('callUser failed', err);
+    }
   }
 
   async endCall(): Promise<void> {
     this.isEndingCall = true;
-    await this.signalRService.leaveCall();
-    this.peerService.cleanupAll();
-    this.callFacade.updateCallState(false);
-    this.currentRoomId.set(null);
+    const meetingId = this.currentMeetingId();
+
+    await this.livekit.leaveMeeting();
+    await this.signalRService.setLeftCall();
     this.ringingMessage.set('');
-    this.incomingCall.set(null);
-    this.meetingMediaService.stopStream();
-    await this.router.navigate(['/dashboard']);
+    this.incomingInvite.set(null);
+
+    // If the host wants to explicitly close the room for everyone, uncomment:
+    // if (meetingId && this.livekit.isHost()) {
+    //   try { await firstValueFrom(this.meetingApi.end(meetingId)); } catch { /* ignore */ }
+    // }
+
+    if (this.dashboardMode() === 'call') {
+      await this.router.navigate(['/dashboard']);
+    }
   }
 
   async logout(): Promise<void> {
@@ -228,14 +267,11 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   }
 
   toggleCamera(): void {
-    this.meetingMediaService.toggleCamera();
-    void this.publishLocalMediaState();
+    void this.livekit.toggleCamera();
   }
 
   toggleMic(): void {
-    this.meetingMediaService.toggleMic();
-    void this.syncLocalAudioSender();
-    void this.publishLocalMediaState();
+    void this.livekit.toggleMic();
   }
 
   canCall(user: User): boolean {
@@ -255,197 +291,126 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   }
 
   acceptIncomingCall(): void {
-    const incomingCall = this.incomingCall();
-    if (!incomingCall) {
+    const invite = this.incomingInvite();
+    if (!invite) {
       return;
     }
 
     if (this.dashboardMode() === 'dashboard') {
-      this.router.navigate(['/meet'], { state: { autoStartMedia: true, source: 'incoming-call' } });
-    }
-
-    void this.signalRService.respondToCall(incomingCall.inviteId, true);
-    this.incomingCall.set(null);
-  }
-
-  rejectIncomingCall(): void {
-    const incomingCall = this.incomingCall();
-    if (!incomingCall) {
+      // Navigate to /meet/:meetingId — ngOnInit will pick meetingId from URL and join
+      this.router.navigate(['/meet', invite.meetingId]);
+      void this.signalRService.respondToInvite(invite.inviteId, true);
+      void this.livekit
+      .joinMeeting(invite.meetingId)
+      .then(() => this.signalRService.setInCall(invite.meetingId))   // ← naya .then
+      .catch((err) => {
+        this.mediaError.set('Could not join the call.');
+        console.error('acceptIncomingCall failed', err);
+      });
+      this.incomingInvite.set(null);
       return;
     }
 
-    void this.signalRService.respondToCall(incomingCall.inviteId, false);
-    this.incomingCall.set(null);
+    // In call mode, we can join right here
+    void this.signalRService.respondToInvite(invite.inviteId, true);
+    void this.livekit.joinMeeting(invite.meetingId).catch((err) => {
+      this.mediaError.set('Could not join the call.');
+      console.error('acceptIncomingCall failed', err);
+    });
+    this.incomingInvite.set(null);
   }
 
-  trackByRemoteId(_: number, item: { userId: string }): string {
-    return item.userId;
+  rejectIncomingCall(): void {
+    const invite = this.incomingInvite();
+    if (!invite) {
+      return;
+    }
+
+    void this.signalRService.respondToInvite(invite.inviteId, false);
+    this.incomingInvite.set(null);
+  }
+
+  trackByParticipantId(_: number, item: { identity: string }): string {
+    return item.identity;
   }
 
   get isCameraOn(): boolean {
-    return this.meetingMediaService.isCameraOn();
+    return this.livekit.isCameraOn();
   }
 
   get isMicOn(): boolean {
-    return this.meetingMediaService.isMicOn();
+    return this.livekit.isMicOn();
+  }
+
+  /** Returns a stable MediaStream for the participant's video, or null. */
+  getRemoteVideoStream(participant: {
+    identity: string;
+    getTrackPublications: () => any[];
+  }): MediaStream | null {
+    const videoPub = participant
+      .getTrackPublications()
+      .find((pub) => pub.kind === 'video' && !pub.isMuted);
+    const track = videoPub?.track?.mediaStreamTrack as MediaStreamTrack | undefined;
+
+    if (!track) {
+      this.remoteStreamCache.delete(participant.identity);
+      return null;
+    }
+
+    const cached = this.remoteStreamCache.get(participant.identity);
+    if (cached && cached.trackId === track.id) {
+      return cached.stream;
+    }
+
+    const stream = new MediaStream([track]);
+    this.remoteStreamCache.set(participant.identity, { stream, trackId: track.id });
+    return stream;
+  }
+
+  isRemoteCameraOn(participant: { getTrackPublications: () => any[] }): boolean {
+    const pub = participant.getTrackPublications().find((p) => p.kind === 'video');
+    return !!pub && !pub.isMuted;
+  }
+
+  isRemoteMicOn(participant: { getTrackPublications: () => any[] }): boolean {
+    const pub = participant.getTrackPublications().find((p) => p.kind === 'audio');
+    return !!pub && !pub.isMuted;
+  }
+
+  getParticipantName(participant: { name?: string; identity: string }): string {
+    return participant.name || participant.identity;
   }
 
   private bindSignalrCallbacks(): void {
     this.signalRService.setCallbacks({
-      onIncomingCall: (payload) => this.incomingCall.set(payload),
-      onCallDeclined: (payload) => {
+      onIncomingInvite: (payload) => {
+        this.incomingInvite.set(payload);
+      },
+      onInviteRinging: () => {
+        // Optional: could show "ringing" indicator; currently ringingMessage set in callUser()
+      },
+      onInviteDeclined: (payload) => {
         this.ringingMessage.set('');
         window.alert(`${payload.declinedByUsername} declined the call.`);
+        // Caller was already in the room waiting — leave since no one is coming
+        void this.livekit.leaveMeeting();
       },
-      onCallAccepted: (payload) => {
+      onInviteAccepted: (payload) => {
         this.ringingMessage.set('');
-        this.currentRoomId.set(payload.roomId);
-
-        if (this.dashboardMode() === 'dashboard') {
-          this.router.navigate(['/meet'], {
-            state: { autoStartMedia: true, callAcceptedPayload: payload },
-          });
-          return;
-        }
-
-        void this.ensureLocalMedia().then(() => {
-          this.currentUserConnectionId.set(this.signalRService.connectionId);
-          return this.syncParticipants(payload.users);
-        });
-      },
-      onInstantMeetingStarted: (payload) => {
-        this.currentRoomId.set(payload.roomId);
-        this.currentUserConnectionId.set(this.signalRService.connectionId);
-        void this.syncParticipants(payload.users);
+        // Both sides call joinMeeting; the callee's Angular calls it in acceptIncomingCall().
+        // The caller is already in the room from callUser(), so nothing more to do here.
+        // Just log for visibility.
+        console.log(
+          'Invite accepted by',
+          payload.acceptedByUsername,
+          'for meeting',
+          payload.meetingId,
+        );
       },
       onCallFailed: (message) => {
         this.ringingMessage.set('');
         window.alert(message);
       },
-      onRoomParticipantsUpdated: (payload) => {
-        if (this.currentRoomId() && this.currentRoomId() !== payload.roomId) {
-          return;
-        }
-
-        this.currentRoomId.set(payload.roomId);
-        if (this.dashboardMode() === 'dashboard' && this.isCurrentUserInRoom(payload.users)) {
-          this.router.navigate(['/meet'], {
-            state: { autoStartMedia: true, callAcceptedPayload: payload },
-          });
-          return;
-        }
-
-        void this.syncParticipants(payload.users);
-      },
-      onReceiveCallOffer: (offer) => {
-        void this.handleIncomingOffer(offer);
-      },
-      onReceiveCallAnswer: (answer) => {
-        void this.peerService.handleAnswer(answer);
-      },
-      onReceiveCandidate: (candidatePayload) => {
-        void this.peerService.handleCandidate(candidatePayload);
-      },
-      onMediaStateUpdated: (payload) => {
-        if (payload.userId === this.currentUserConnectionId()) {
-          return;
-        }
-
-        this.peerService.updateRemoteMediaState(payload.userId, payload.isCameraOn, payload.isMicOn);
-      },
     });
-  }
-
-  private async syncParticipants(users: User[]): Promise<void> {
-    await this.ensureLocalMedia();
-    this.currentUserConnectionId.set(this.signalRService.connectionId);
-
-    const localStream = this.meetingMediaService.localStream();
-    const roomId = this.currentRoomId();
-    if (!localStream || !roomId) {
-      return;
-    }
-
-    const remoteUsers = users.filter((u) => u.id !== this.currentUserConnectionId());
-    await this.peerService.syncParticipants(remoteUsers, this.currentUserConnectionId(), roomId, localStream);
-    await this.publishLocalMediaState();
-  }
-
-  private async handleIncomingOffer(offer: {
-    from: string;
-    to: string;
-    roomId: string;
-    offer: RTCSessionDescriptionInit;
-  }): Promise<void> {
-    if (this.currentRoomId() && this.currentRoomId() !== offer.roomId) {
-      return;
-    }
-
-    await this.ensureLocalMedia();
-    if (!this.currentRoomId()) {
-      this.currentRoomId.set(offer.roomId);
-    }
-
-    const localStream = this.meetingMediaService.localStream();
-    if (!localStream) {
-      return;
-    }
-
-    await this.peerService.handleOffer(offer, this.currentRoomId()!, localStream);
-  }
-
-  private async publishLocalMediaState(): Promise<void> {
-    const roomId = this.currentRoomId();
-    if (!roomId || this.dashboardMode() !== 'call') {
-      return;
-    }
-
-    await this.signalRService.sendMediaState(
-      roomId,
-      this.meetingMediaService.isCameraOn(),
-      this.meetingMediaService.isMicOn(),
-    );
-  }
-
-  private async syncLocalAudioSender(): Promise<void> {
-    const localStream = this.meetingMediaService.localStream();
-    if (!localStream) {
-      return;
-    }
-
-    const localAudioTrack = localStream.getAudioTracks()[0] ?? null;
-    await this.peerService.syncAudioSenderState(this.meetingMediaService.isMicOn(), localAudioTrack);
-  }
-
-  private isCurrentUserInRoom(users: Array<{ id: string }>): boolean {
-    const connectionId = this.signalRService.connectionId;
-    if (!connectionId) {
-      return false;
-    }
-
-    return users.some((user) => user.id === connectionId);
-  }
-
-  private async ensureLocalMedia(): Promise<void> {
-    if (this.dashboardMode() !== 'call') {
-      return;
-    }
-
-    try {
-      await this.meetingMediaService.ensureLocalStream();
-      this.mediaError.set('');
-      await this.attachLocalPreview();
-    } catch {
-      this.mediaError.set('Camera and microphone access is required for meetings.');
-    }
-  }
-
-  private async attachLocalPreview(): Promise<void> {
-    const localVideo = this.localVideoRef?.nativeElement;
-    if (!localVideo || this.dashboardMode() !== 'call') {
-      return;
-    }
-
-    await this.meetingMediaService.attachStream(localVideo);
   }
 }

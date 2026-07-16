@@ -1,71 +1,58 @@
 import { inject, Injectable } from '@angular/core';
 import * as signalR from '@microsoft/signalr';
 import { UsersFacade } from '../store/facades/users.facade';
-import { CallOfferDto } from '../dtos/callofferDto';
-import { CallFacade } from '../store/facades/call.facade';
 import { AuthService } from './auth.service';
 import { environment } from '../../environments/environment';
 
-type IncomingCallPayload = {
+/**
+ * Payload types that mirror the C# MeetingHub events.
+ */
+export type InvitePayload = {
   inviteId: string;
-  roomId: string;
+  meetingId: string;
   fromUserId: string;
   fromUsername: string;
 };
 
-type CallDeclinedPayload = {
+export type InviteRingingPayload = {
   inviteId: string;
-  roomId: string;
+  meetingId: string;
+  toUserId: string;
+  toUsername: string;
+};
+
+export type InviteDeclinedPayload = {
+  inviteId: string;
+  meetingId: string;
   declinedByUserId: string;
   declinedByUsername: string;
 };
 
-type CallAcceptedPayload = {
+export type InviteAcceptedPayload = {
   inviteId: string;
-  roomId: string;
+  meetingId: string;
   acceptedByUserId: string;
   acceptedByUsername: string;
-  users: Array<{ id: string; username: string; isInCall: boolean; roomId?: string | null }>;
 };
 
-type RoomParticipantsPayload = {
-  roomId: string;
-  users: Array<{ id: string; username: string; isInCall: boolean; roomId?: string | null }>;
-};
-
-type CandidatePayload = {
-  roomId: string;
-  from: string;
-  to: string;
-  candidate: RTCIceCandidateInit;
-};
-
-type MediaStatePayload = {
-  roomId: string;
-  userId: string;
-  isCameraOn: boolean;
-  isMicOn: boolean;
-};
-
-type SignalRCallbacks = {
-  onIncomingCall?: (payload: IncomingCallPayload) => void;
-  onCallDeclined?: (payload: CallDeclinedPayload) => void;
-  onCallAccepted?: (payload: CallAcceptedPayload) => void;
-  onInstantMeetingStarted?: (payload: RoomParticipantsPayload) => void;
+export type SignalRCallbacks = {
+  onIncomingInvite?: (payload: InvitePayload) => void;
+  onInviteRinging?: (payload: InviteRingingPayload) => void;
+  onInviteDeclined?: (payload: InviteDeclinedPayload) => void;
+  onInviteAccepted?: (payload: InviteAcceptedPayload) => void;
   onCallFailed?: (message: string) => void;
-  onCallRinging?: (payload: { toUsername: string }) => void;
-  onRoomParticipantsUpdated?: (payload: RoomParticipantsPayload) => void;
-  onReceiveCallOffer?: (offer: CallOfferDto) => void;
-  onReceiveCallAnswer?: (answer: CallOfferDto) => void;
-  onReceiveCandidate?: (candidatePayload: CandidatePayload) => void;
-  onMediaStateUpdated?: (payload: MediaStatePayload) => void;
 };
 
+/**
+ * Wraps SignalR connection to /meetingHub. Post-Phase-1, this hub is only
+ * responsible for presence and invite delivery. All media (SDP/ICE/tracks)
+ * is handled by LiveKit via LivekitMeetingService.
+ */
 @Injectable()
 export class SignalrService {
-  private userFacade = inject(UsersFacade);
-  private callFacade = inject(CallFacade);
-  private authService = inject(AuthService);
+  private readonly userFacade = inject(UsersFacade);
+  private readonly authService = inject(AuthService);
+
   private myConnectionID = '';
   private hubConnection!: signalR.HubConnection;
   private handlersAttached = false;
@@ -80,7 +67,7 @@ export class SignalrService {
     return this.myConnectionID;
   }
 
-  private createHubConnection() {
+  private createHubConnection(): void {
     this.hubConnection = new signalR.HubConnectionBuilder()
       .withUrl(environment.signalrHubUrl, {
         accessTokenFactory: () => this.authService.token() ?? '',
@@ -96,7 +83,7 @@ export class SignalrService {
     });
   }
 
-  async connectAndJoin() {
+  async connectAndJoin(): Promise<void> {
     if (!this.authService.isAuthenticated()) {
       return;
     }
@@ -105,13 +92,13 @@ export class SignalrService {
       await this.hubConnection.start();
       this.myConnectionID = this.hubConnection.connectionId ?? '';
       this.hasJoinedCurrentConnection = false;
-      console.log('SignalR Connected with ID: ', this.myConnectionID);
+      console.log('SignalR Connected with ID:', this.myConnectionID);
     }
 
     await this.joinUser();
   }
 
-  async disconnect() {
+  async disconnect(): Promise<void> {
     if (this.hubConnection.state !== signalR.HubConnectionState.Disconnected) {
       await this.hubConnection.stop();
     }
@@ -121,8 +108,11 @@ export class SignalrService {
     this.userFacade.updateUserList([]);
   }
 
-  async joinUser() {
-    if (this.hubConnection.state !== signalR.HubConnectionState.Connected || this.hasJoinedCurrentConnection) {
+  async joinUser(): Promise<void> {
+    if (
+      this.hubConnection.state !== signalR.HubConnectionState.Connected ||
+      this.hasJoinedCurrentConnection
+    ) {
       return;
     }
 
@@ -130,166 +120,84 @@ export class SignalrService {
     this.hasJoinedCurrentConnection = true;
   }
 
-  async startCall(targetUserId: string): Promise<void> {
+  /**
+   * Send a meeting invite to another user.
+   * The caller has already created the meeting via POST /api/meetings.
+   */
+  async inviteToMeeting(targetConnectionId: string, meetingId: string): Promise<void> {
     if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
       return;
     }
 
-    await this.hubConnection.invoke('StartCall', targetUserId);
+    await this.hubConnection.invoke('InviteToMeeting', targetConnectionId, meetingId);
   }
 
-  async respondToCall(inviteId: string, accepted: boolean): Promise<void> {
+  /** Accept or decline an invite. */
+  async respondToInvite(inviteId: string, accepted: boolean): Promise<void> {
     if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
       return;
     }
 
-    await this.hubConnection.invoke('RespondToCall', inviteId, accepted);
+    await this.hubConnection.invoke('RespondToInvite', inviteId, accepted);
   }
 
-  async startInstantMeeting(): Promise<void> {
-    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
-      return;
-    }
-
-    await this.hubConnection.invoke('StartInstantMeeting');
-  }
-
-  async sendCallOffer(roomId: string, toUserId: string, offer: RTCSessionDescriptionInit): Promise<void> {
-    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
-      return;
-    }
-
-    await this.hubConnection.invoke('SendCallOffer', new CallOfferDto(this.myConnectionID, toUserId, roomId, offer));
-  }
-
-  async sendCallAnswer(roomId: string, toUserId: string, answer: RTCSessionDescriptionInit): Promise<void> {
-    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
-      return;
-    }
-
-    await this.hubConnection.invoke('SendCallAnswer', new CallOfferDto(this.myConnectionID, toUserId, roomId, answer));
-  }
-
-  async sendIceCandidate(roomId: string, toUserId: string, candidate: RTCIceCandidateInit): Promise<void> {
-    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
-      return;
-    }
-
-    await this.hubConnection.invoke('SendCandidate', roomId, toUserId, candidate);
-  }
-
-  async sendMediaState(roomId: string, isCameraOn: boolean, isMicOn: boolean): Promise<void> {
-    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
-      return;
-    }
-
-    await this.hubConnection.invoke('UpdateMediaState', roomId, isCameraOn, isMicOn);
-  }
-
-  async leaveCall(): Promise<void> {
-    if (this.hubConnection.state === signalR.HubConnectionState.Connected) {
-      await this.hubConnection.invoke('LeaveCall');
-    }
-
-    this.callFacade.updateCallState(false);
-  }
-
-  setCallbacks(callbacks: SignalRCallbacks) {
+  setCallbacks(callbacks: SignalRCallbacks): void {
     this.callbacks = callbacks;
   }
 
-  private userJoined() {
-    this.hubConnection.on('UserJoined', (allUsers: Array<{ id: string; username: string; isInCall: boolean; roomId?: string | null }>) => {
-      console.log('User joined from server: ', JSON.stringify(allUsers));
-      this.userFacade.updateUserList(allUsers);
-    });
+  async setInCall(meetingId: string): Promise<void> {
+    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
+      return;
+    }
+    await this.hubConnection.invoke('SetInCall', meetingId);
   }
 
-  private receiveIncomingCall() {
-    this.hubConnection.on('ReceiveIncomingCall', (payload: IncomingCallPayload) => {
-      this.callbacks.onIncomingCall?.(payload);
-    });
+  async setLeftCall(): Promise<void> {
+    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
+      return;
+    }
+    await this.hubConnection.invoke('SetLeftCall');
   }
 
-  private receiveCallDeclined() {
-    this.hubConnection.on('CallDeclined', (payload: CallDeclinedPayload) => {
-      this.callbacks.onCallDeclined?.(payload);
-    });
-  }
-
-  private receiveCallAccepted() {
-    this.hubConnection.on('CallAccepted', (payload: CallAcceptedPayload) => {
-      this.callFacade.updateCallState(true);
-      this.callbacks.onCallAccepted?.(payload);
-    });
-  }
-
-  private receiveCallRinging() {
-    this.hubConnection.on('CallRinging', (payload: { toUsername: string }) => {
-      this.callbacks.onCallRinging?.(payload);
-    });
-  }
-
-  private receiveCallFailed() {
-    this.hubConnection.on('CallFailed', (message: string) => {
-      this.callbacks.onCallFailed?.(message);
-    });
-  }
-
-  private receiveParticipantsUpdated() {
-    this.hubConnection.on('RoomParticipantsUpdated', (payload: RoomParticipantsPayload) => {
-      this.callbacks.onRoomParticipantsUpdated?.(payload);
-    });
-  }
-
-  private receiveInstantMeetingStarted() {
-    this.hubConnection.on('InstantMeetingStarted', (payload: RoomParticipantsPayload) => {
-      this.callFacade.updateCallState(true);
-      this.callbacks.onInstantMeetingStarted?.(payload);
-    });
-  }
-
-  private receiveCallOffer() {
-    this.hubConnection.on('ReceiveCallOffer', (callOffer: CallOfferDto) => {
-      this.callbacks.onReceiveCallOffer?.(callOffer);
-    });
-  }
-
-  private receiveCallAnswer() {
-    this.hubConnection.on('ReceiveCallAnswer', (callOffer: CallOfferDto) => {
-      this.callbacks.onReceiveCallAnswer?.(callOffer);
-    });
-  }
-
-  private receiveCandidate() {
-    this.hubConnection.on('ReceiveCandidate', (payload: CandidatePayload) => {
-      this.callbacks.onReceiveCandidate?.(payload);
-    });
-  }
-
-  private receiveMediaStateUpdated() {
-    this.hubConnection.on('MediaStateUpdated', (payload: MediaStatePayload) => {
-      this.callbacks.onMediaStateUpdated?.(payload);
-    });
-  }
-
-  attachSignalRHandlers() {
+  attachSignalRHandlers(): void {
     if (this.handlersAttached) {
       return;
     }
 
-    this.userJoined();
-    this.receiveIncomingCall();
-    this.receiveCallDeclined();
-    this.receiveCallAccepted();
-    this.receiveCallRinging();
-    this.receiveCallFailed();
-    this.receiveParticipantsUpdated();
-    this.receiveInstantMeetingStarted();
-    this.receiveCallOffer();
-    this.receiveCallAnswer();
-    this.receiveCandidate();
-    this.receiveMediaStateUpdated();
+    this.hubConnection.on(
+      'UserJoined',
+      (
+        allUsers: Array<{
+          id: string;
+          username: string;
+          isInCall: boolean;
+          roomId?: string | null;
+        }>,
+      ) => {
+        this.userFacade.updateUserList(allUsers);
+      },
+    );
+
+    this.hubConnection.on('ReceiveInvite', (payload: InvitePayload) => {
+      this.callbacks.onIncomingInvite?.(payload);
+    });
+
+    this.hubConnection.on('InviteRinging', (payload: InviteRingingPayload) => {
+      this.callbacks.onInviteRinging?.(payload);
+    });
+
+    this.hubConnection.on('InviteAccepted', (payload: InviteAcceptedPayload) => {
+      this.callbacks.onInviteAccepted?.(payload);
+    });
+
+    this.hubConnection.on('InviteDeclined', (payload: InviteDeclinedPayload) => {
+      this.callbacks.onInviteDeclined?.(payload);
+    });
+
+    this.hubConnection.on('CallFailed', (message: string) => {
+      this.callbacks.onCallFailed?.(message);
+    });
+
     this.handlersAttached = true;
   }
 }

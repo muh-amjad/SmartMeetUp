@@ -7,7 +7,6 @@ import { AuthService } from '../../services/auth.service';
 import { MeetingMediaService } from '../../services/meeting-media.service';
 import { SignalrService } from '../../services/signalr.service';
 import { UserDirectoryService } from '../../services/user-directory.service';
-import { WebrtcPeerService } from '../../services/webrtc-peer.service';
 import { CallFacade } from '../../store/facades/call.facade';
 import { UsersFacade } from '../../store/facades/users.facade';
 import { MeetupHome } from './meetup-home';
@@ -98,7 +97,6 @@ describe('MeetupHome', () => {
         { provide: MeetingMediaService, useValue: meetingMediaStub },
         { provide: AuthService, useValue: authServiceStub },
         { provide: UserDirectoryService, useValue: userDirectoryStub },
-        { provide: WebrtcPeerService, useValue: peerServiceStub },
         { provide: Router, useValue: routerStub },
         { provide: ActivatedRoute, useValue: { snapshot: { data: { mode: 'call' } } } },
       ],
@@ -112,10 +110,7 @@ describe('MeetupHome', () => {
     expect(component).toBeTruthy();
   });
 
-  it('exposes the peer service remote videos signal', () => {
-    expect(component.remoteVideos).toBe(peerServiceStub.remoteVideos);
-  });
-
+  
   it('configures the peer service with signalling callbacks', () => {
     expect(peerServiceStub.configure).toHaveBeenCalledTimes(1);
     const callbacks = peerServiceStub.configure.mock.calls[0][0];

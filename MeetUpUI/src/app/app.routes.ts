@@ -7,11 +7,17 @@ import { MeetupHome } from './pages/meetup-home/meetup-home';
 import { SignupPage } from './pages/signup/signup';
 
 export const routes: Routes = [
-    { path: '', component: HomePage },
-    { path: 'login', component: LoginPage },
-    { path: 'signup', component: SignupPage },
-    { path: 'dashboard', component: MeetupHome, canActivate: [authGuard], data: { mode: 'dashboard' } },
-    { path: 'preview', component: MeetingPreviewPage, canActivate: [authGuard] },
-    { path: 'meet', component: MeetupHome, canActivate: [authGuard] },
-    { path: '**', redirectTo: '' },
+  { path: '', component: HomePage },
+  { path: 'login', component: LoginPage },
+  { path: 'signup', component: SignupPage },
+  {
+    path: 'dashboard',
+    component: MeetupHome,
+    canActivate: [authGuard],
+    data: { mode: 'dashboard' },
+  },
+  { path: 'preview', component: MeetingPreviewPage, canActivate: [authGuard] },
+  { path: 'meet/:meetingId', component: MeetupHome, canActivate: [authGuard],data: { mode: 'call' } },
+  { path: 'meet', component: MeetupHome, canActivate: [authGuard], data: { mode: 'call' } },
+  { path: '**', redirectTo: '' },
 ];
