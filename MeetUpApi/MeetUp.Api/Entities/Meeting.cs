@@ -23,9 +23,11 @@ public class Meeting
     public string? RecordingBlobKey { get; set; }
     public int? RecordingDurationSeconds { get; set; }
 
-    // Audit
-    public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
+
+    public ICollection<MeetingParticipant> Participants { get; set; } = new List<MeetingParticipant>();
+    public ICollection<ChatMessage> ChatMessages { get; set; } = new List<ChatMessage>();
 }
 
 public enum MeetingStatus
