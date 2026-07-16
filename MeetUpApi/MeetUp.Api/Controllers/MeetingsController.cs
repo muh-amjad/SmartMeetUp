@@ -1,0 +1,326 @@
+﻿using System.Security.Claims;
+using MeetUp.Api.Dtos.Meetings;
+using MeetUp.Api.Entities;
+using MeetUp.Api.Infrastructure.Exceptions;
+using MeetUp.Api.Options;
+using MeetUp.Api.Repositories;
+using MeetUp.Api.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+
+namespace MeetUp.Api.Controllers;
+
+[ApiController]
+[Authorize]
+[Route("api/[controller]")]
+public class MeetingsController : ControllerBase
+{
+    private readonly IMeetingRepository _meetingRepository;
+    private readonly IMeetingParticipantRepository _participantRepository;
+    private readonly IChatMessageRepository _chatMessageRepository;
+    private readonly ILiveKitService _liveKitService;
+    private readonly LiveKitOptions _liveKitOptions;
+    private readonly ILogger<MeetingsController> _logger;
+
+    public MeetingsController(
+    IMeetingRepository meetingRepository,
+    IMeetingParticipantRepository participantRepository,
+    IChatMessageRepository chatMessageRepository,
+    ILiveKitService liveKitService,
+    IOptions<LiveKitOptions> liveKitOptions,
+    ILogger<MeetingsController> logger)
+    {
+        _meetingRepository = meetingRepository;
+        _participantRepository = participantRepository;
+        _chatMessageRepository = chatMessageRepository;
+        _liveKitService = liveKitService;
+        _liveKitOptions = liveKitOptions.Value;
+        _logger = logger;
+    }
+
+    /// <summary>Creates a new meeting and returns the host's LiveKit access token.</summary>
+    [HttpPost]
+    public async Task<ActionResult<CreateMeetingResponseDto>> Create(
+        [FromBody] CreateMeetingRequestDto? request,
+        CancellationToken ct)
+    {
+        var hostUserId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+        var hostUsername = User.Identity?.Name ?? "Host";
+
+        var meeting = new Meeting
+        {
+            Id = Guid.NewGuid(),
+            HostUserId = hostUserId,
+            Title = string.IsNullOrWhiteSpace(request?.Title) ? "Untitled Meeting" : request!.Title.Trim(),
+            LiveKitRoomName = $"meeting-{Guid.NewGuid():N}",  // unique room name in LiveKit
+            Status = MeetingStatus.Scheduled,
+            CreatedUtc = DateTime.UtcNow,
+            UpdatedUtc = DateTime.UtcNow,
+        };
+
+        await _meetingRepository.AddAsync(meeting, ct);
+        await _meetingRepository.SaveChangesAsync(ct);
+
+        // Try to create the room upfront so we can control settings.
+        // If this fails, LiveKit will auto-create on first participant join (room.auto_create=true).
+        try
+        {
+            await _liveKitService.CreateRoomAsync(meeting.LiveKitRoomName, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "LiveKit CreateRoom failed for {RoomName}; relying on auto_create",
+                meeting.LiveKitRoomName);
+        }
+
+        var token = _liveKitService.GenerateAccessToken(
+            roomName: meeting.LiveKitRoomName,
+            participantIdentity: hostUserId,
+            displayName: hostUsername,
+            isHost: true);
+
+        _logger.LogInformation("User {UserId} created meeting {MeetingId} in room {RoomName}",
+            hostUserId, meeting.Id, meeting.LiveKitRoomName);
+
+        return Ok(new CreateMeetingResponseDto
+        {
+            MeetingId = meeting.Id,
+            Title = meeting.Title,
+            LivekitToken = token,
+            LivekitWsUrl = _liveKitOptions.WsUrl,
+            RoomName = meeting.LiveKitRoomName,
+        });
+    }
+
+    /// <summary>Returns a LiveKit access token so the caller can join an existing meeting.</summary>
+    [HttpPost("{id:guid}/join")]
+    public async Task<ActionResult<JoinMeetingResponseDto>> Join(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+        var username = User.Identity?.Name ?? "User";
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (meeting.Status == MeetingStatus.Ended || meeting.EndedUtc.HasValue)
+        {
+            throw new ConflictException("Meeting has already ended.");
+        }
+
+        var isHost = string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal);
+
+        var token = _liveKitService.GenerateAccessToken(
+            roomName: meeting.LiveKitRoomName,
+            participantIdentity: userId,
+            displayName: username,
+            isHost: isHost);
+
+        _logger.LogInformation("User {UserId} joining meeting {MeetingId} (host={IsHost})",
+            userId, meeting.Id, isHost);
+
+        return Ok(new JoinMeetingResponseDto
+        {
+            MeetingId = meeting.Id,
+            Title = meeting.Title,
+            LivekitToken = token,
+            LivekitWsUrl = _liveKitOptions.WsUrl,
+            RoomName = meeting.LiveKitRoomName,
+            IsHost = isHost,
+        });
+    }
+
+    /// <summary>Host-only: closes the LiveKit room and marks the meeting as ended.</summary>
+    [HttpPost("{id:guid}/end")]
+    public async Task<IActionResult> End(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can end this meeting.");
+        }
+
+        if (meeting.Status == MeetingStatus.Ended)
+        {
+            return NoContent();  // already ended, idempotent
+        }
+
+        await _liveKitService.EndRoomAsync(meeting.LiveKitRoomName, ct);
+
+        meeting.Status = MeetingStatus.Ended;
+        meeting.EndedUtc = DateTime.UtcNow;
+        meeting.UpdatedUtc = DateTime.UtcNow;
+        await _meetingRepository.UpdateAsync(meeting, ct);
+        await _meetingRepository.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Meeting {MeetingId} ended by host {UserId}", meeting.Id, userId);
+        return NoContent();
+    }
+
+    /// <summary>List the caller's meetings (as host or participant).</summary>
+    [HttpGet]
+    public async Task<ActionResult<IReadOnlyList<MeetingListItemDto>>> ListMeetings(
+        [FromQuery] MeetingStatus? status,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meetings = await _meetingRepository.GetUserMeetingsAsync(userId, status, page, pageSize, ct);
+
+        var result = meetings.Select(m => new MeetingListItemDto
+        {
+            MeetingId = m.Id,
+            Title = m.Title,
+            Status = m.Status.ToString(),
+            ScheduledStartUtc = m.ScheduledStartUtc,
+            ActualStartUtc = m.ActualStartUtc,
+            EndedUtc = m.EndedUtc,
+            CreatedUtc = m.CreatedUtc,
+            ParticipantCount = m.Participants?.Count ?? 0,
+            IsHost = string.Equals(m.HostUserId, userId, StringComparison.Ordinal),
+        }).ToList();
+
+        return Ok(result);
+    }
+
+    /// <summary>Meeting detail with participants.</summary>
+    [HttpGet("{id:guid}")]
+    public async Task<ActionResult<MeetingDetailDto>> GetMeeting(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        // Access control: only host or participants can see the detail
+        var participants = await _participantRepository.GetByMeetingAsync(id, ct);
+        var isHost = string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal);
+        var isParticipant = participants.Any(p => p.UserId == userId);
+
+        if (!isHost && !isParticipant)
+        {
+            throw new ForbiddenException("You are not part of this meeting.");
+        }
+
+        return Ok(new MeetingDetailDto
+        {
+            MeetingId = meeting.Id,
+            Title = meeting.Title,
+            HostUserId = meeting.HostUserId,
+            HostUsername = meeting.Host?.UserName ?? string.Empty,
+            Status = meeting.Status.ToString(),
+            ScheduledStartUtc = meeting.ScheduledStartUtc,
+            ActualStartUtc = meeting.ActualStartUtc,
+            EndedUtc = meeting.EndedUtc,
+            LiveKitRoomName = meeting.LiveKitRoomName,
+            RecordingDurationSeconds = meeting.RecordingDurationSeconds,
+            CreatedUtc = meeting.CreatedUtc,
+            IsHost = isHost,
+            Participants = participants.Select(p => new ParticipantDto
+            {
+                UserId = p.UserId,
+                Username = p.User?.UserName ?? string.Empty,
+                Role = p.Role.ToString(),
+                JoinedUtc = p.JoinedUtc,
+                LeftUtc = p.LeftUtc,
+                SpeakingSeconds = p.SpeakingSeconds,
+            }).ToList(),
+        });
+    }
+
+    /// <summary>Update meeting title / schedule (host only).</summary>
+    [HttpPatch("{id:guid}")]
+    public async Task<IActionResult> UpdateMeeting(Guid id, [FromBody] UpdateMeetingRequestDto request, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can update this meeting.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Title))
+        {
+            meeting.Title = request.Title.Trim();
+        }
+        if (request.ScheduledStartUtc.HasValue)
+        {
+            meeting.ScheduledStartUtc = request.ScheduledStartUtc;
+        }
+
+        meeting.UpdatedUtc = DateTime.UtcNow;
+        await _meetingRepository.UpdateAsync(meeting, ct);
+        await _meetingRepository.SaveChangesAsync(ct);
+
+        return NoContent();
+    }
+
+    /// <summary>Delete a meeting (host only). Cascades to participants + chat messages.</summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> DeleteMeeting(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can delete this meeting.");
+        }
+
+        await _meetingRepository.DeleteAsync(meeting, ct);
+        await _meetingRepository.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Meeting {MeetingId} deleted by host {UserId}", meeting.Id, userId);
+        return NoContent();
+    }
+
+    /// <summary>Chat message history for a meeting.</summary>
+    [HttpGet("{id:guid}/chat")]
+    public async Task<ActionResult<IReadOnlyList<ChatMessageDto>>> GetChat(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        // Access control same as GetMeeting
+        var participants = await _participantRepository.GetByMeetingAsync(id, ct);
+        var isHost = string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal);
+        var isParticipant = participants.Any(p => p.UserId == userId);
+        if (!isHost && !isParticipant)
+        {
+            throw new ForbiddenException("You are not part of this meeting.");
+        }
+
+        var messages = await _chatMessageRepository.GetByMeetingAsync(id, ct);
+
+        return Ok(messages.Select(m => new ChatMessageDto
+        {
+            Id = m.Id,
+            SenderUserId = m.SenderUserId,
+            SenderUsername = m.Sender?.UserName ?? string.Empty,
+            Text = m.Text,
+            SentUtc = m.SentUtc,
+        }).ToList());
+    }
+}

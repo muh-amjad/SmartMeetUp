@@ -62,6 +62,8 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IUserRepository, UserRepository>();
             builder.Services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
             builder.Services.AddScoped<IMeetingRepository, MeetingRepository>();
+            builder.Services.AddScoped<IMeetingParticipantRepository, MeetingParticipantRepository>();   // ← naya
+            builder.Services.AddScoped<IChatMessageRepository, ChatMessageRepository>();                 // ← naya
 
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();

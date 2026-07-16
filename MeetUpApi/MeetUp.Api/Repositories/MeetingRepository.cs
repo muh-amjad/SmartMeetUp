@@ -35,4 +35,37 @@ public sealed class MeetingRepository : IMeetingRepository
     {
         return _dbContext.SaveChangesAsync(ct);
     }
+
+    public Task DeleteAsync(Meeting meeting, CancellationToken ct)
+    {
+        _dbContext.Meetings.Remove(meeting);
+        return Task.CompletedTask;
+    }
+
+    public async Task<IReadOnlyList<Meeting>> GetUserMeetingsAsync(
+        string userId,
+        MeetingStatus? status,
+        int page,
+        int pageSize,
+        CancellationToken ct)
+    {
+        // "My meetings" = meetings I hosted OR meetings I participated in
+        var query = _dbContext.Meetings
+            .Include(m => m.Host)
+            .Include(m => m.Participants)
+            .Where(m =>
+                m.HostUserId == userId ||
+                m.Participants.Any(p => p.UserId == userId));
+
+        if (status.HasValue)
+        {
+            query = query.Where(m => m.Status == status.Value);
+        }
+
+        return await query
+            .OrderByDescending(m => m.CreatedUtc)
+            .Skip(Math.Max(0, page - 1) * pageSize)
+            .Take(Math.Clamp(pageSize, 1, 100))
+            .ToListAsync(ct);
+    }
 }
