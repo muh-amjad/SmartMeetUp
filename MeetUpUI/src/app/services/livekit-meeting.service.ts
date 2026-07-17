@@ -45,6 +45,10 @@ export class LivekitMeetingService {
     const room = new Room({
       adaptiveStream: true,           // reduce quality on bad networks
       dynacast: true,                 // pause unpublished tracks server-side
+      // When we unpublish a track (e.g. camera off), stop the underlying
+      // MediaStreamTrack too — this releases the hardware so the OS camera
+      // light goes off. Default is true in recent versions; explicit for safety.
+      stopLocalTrackOnUnpublish: true,
     });
 
     this.wireEvents(room);
@@ -81,22 +85,67 @@ export class LivekitMeetingService {
     }
     const room = this.room;
     this.room = null;
+
+    // Explicitly disable camera + mic first. This unpublishes the tracks
+    // and (with stopLocalTrackOnUnpublish=true) stops them, releasing the
+    // OS-level camera/mic hardware so the indicator light turns off.
+    try {
+      await room.localParticipant.setCameraEnabled(false);
+      await room.localParticipant.setMicrophoneEnabled(false);
+    } catch (err) {
+      console.warn('Error disabling local tracks on leave', err);
+    }
+
+    // Belt + suspenders: also stop any remaining local tracks (e.g. screen share).
+    for (const pub of room.localParticipant.getTrackPublications()) {
+      try {
+        pub.track?.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+
     await room.disconnect();
     // Signals cleared in the `Disconnected` event handler
   }
 
-  /** Toggle the local user's camera. */
+  /** Toggle the local user's camera. When disabling, stop the track fully so
+   *  the camera hardware light turns off (LiveKit only mutes by default).
+   *  The stop runs in `finally` so hardware is released even if the SDK call
+   *  itself throws — we never want to leave the camera running silently. */
   async toggleCamera(): Promise<void> {
     if (!this.room) return;
     const lp = this.room.localParticipant;
-    await lp.setCameraEnabled(!lp.isCameraEnabled);
+    const willEnable = !lp.isCameraEnabled;
+
+    try {
+      await lp.setCameraEnabled(willEnable);
+    } finally {
+      if (!willEnable) {
+        lp.getTrackPublications()
+          .filter((pub) => pub.kind === 'video')
+          .forEach((pub) => pub.track?.stop());
+      }
+    }
   }
 
-  /** Toggle the local user's microphone. */
+  /** Toggle the local user's microphone. When disabling, stop the track fully
+   *  so the mic hardware indicator turns off. Same `finally` guarantee as
+   *  toggleCamera. */
   async toggleMic(): Promise<void> {
     if (!this.room) return;
     const lp = this.room.localParticipant;
-    await lp.setMicrophoneEnabled(!lp.isMicrophoneEnabled);
+    const willEnable = !lp.isMicrophoneEnabled;
+
+    try {
+      await lp.setMicrophoneEnabled(willEnable);
+    } finally {
+      if (!willEnable) {
+        lp.getTrackPublications()
+          .filter((pub) => pub.kind === 'audio')
+          .forEach((pub) => pub.track?.stop());
+      }
+    }
   }
 
   /** True if the local camera track is publishing. */

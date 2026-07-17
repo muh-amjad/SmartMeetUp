@@ -1,12 +1,13 @@
-﻿using System.Text.Json;
-using Livekit.Server.Sdk.Dotnet;
+﻿using Livekit.Server.Sdk.Dotnet;
 using MeetUp.Api.Data;
 using MeetUp.Api.Dtos.Webhooks;
 using MeetUp.Api.Entities;
 using MeetUp.Api.Options;
+using MeetUp.Api.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace MeetUp.Api.Controllers;
 
@@ -17,6 +18,7 @@ public class LiveKitWebhookController : ControllerBase
     private readonly LiveKitOptions _liveKitOptions;
     private readonly AppDbContext _dbContext;
     private readonly ILogger<LiveKitWebhookController> _logger;
+    private readonly IMeetingParticipantRepository _participantRepository;
     private readonly WebhookReceiver _receiver;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -25,12 +27,14 @@ public class LiveKitWebhookController : ControllerBase
     };
 
     public LiveKitWebhookController(
-        IOptions<LiveKitOptions> liveKitOptions,
-        AppDbContext dbContext,
-        ILogger<LiveKitWebhookController> logger)
+    IOptions<LiveKitOptions> liveKitOptions,
+    AppDbContext dbContext,
+    IMeetingParticipantRepository participantRepository,
+    ILogger<LiveKitWebhookController> logger)
     {
         _liveKitOptions = liveKitOptions.Value;
         _dbContext = dbContext;
+        _participantRepository = participantRepository;
         _logger = logger;
         _receiver = new WebhookReceiver(_liveKitOptions.ApiKey, _liveKitOptions.ApiSecret);
     }
@@ -107,9 +111,11 @@ public class LiveKitWebhookController : ControllerBase
                 break;
 
             case "participant_joined":
+                await HandleParticipantJoinedAsync(payload, ct);
+                break;
+
             case "participant_left":
-                // Phase 2 will implement these (need MeetingParticipant entity)
-                _logger.LogDebug("Participant event {Event} received (not yet handled)", payload.Event);
+                await HandleParticipantLeftAsync(payload, ct);
                 break;
 
             default:
@@ -164,14 +170,89 @@ public class LiveKitWebhookController : ControllerBase
             return;
         }
 
-        if (meeting.Status != MeetingStatus.Ended)
+        if (meeting.Status != MeetingStatus.Ended && meeting.Status != MeetingStatus.Processing)
         {
             meeting.EndedUtc = DateTime.UtcNow;
-            meeting.Status = MeetingStatus.Ended;   // Phase 3 mein "Processing" ho jayega
+            meeting.Status = MeetingStatus.Processing;
             meeting.UpdatedUtc = DateTime.UtcNow;
             await _dbContext.SaveChangesAsync(ct);
 
-            _logger.LogInformation("Meeting {MeetingId} marked Ended", meeting.Id);
+            _logger.LogInformation("Meeting {MeetingId} marked Processing (recording pipeline will run)", meeting.Id);
         }
+    }
+
+    private async Task HandleParticipantJoinedAsync(LiveKitWebhookEventDto payload, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(payload.Room?.Name) ||
+            string.IsNullOrWhiteSpace(payload.Participant?.Identity))
+        {
+            return;
+        }
+
+        var meeting = await _dbContext.Meetings
+            .FirstOrDefaultAsync(m => m.LiveKitRoomName == payload.Room.Name, ct);
+
+        if (meeting is null)
+        {
+            _logger.LogWarning("participant_joined for unknown room {RoomName}", payload.Room.Name);
+            return;
+        }
+
+        var userId = payload.Participant.Identity;
+        var existing = await _participantRepository.GetByMeetingAndUserAsync(meeting.Id, userId, ct);
+
+        if (existing is null)
+        {
+            var isHost = string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal);
+            var participant = new MeetingParticipant
+            {
+                Id = Guid.NewGuid(),
+                MeetingId = meeting.Id,
+                UserId = userId,
+                Role = isHost ? ParticipantRole.Host : ParticipantRole.Participant,
+                JoinedUtc = DateTime.UtcNow,
+            };
+            await _participantRepository.AddAsync(participant, ct);
+        }
+        else
+        {
+            // Rejoin scenario — clear LeftUtc, refresh JoinedUtc if missing
+            existing.LeftUtc = null;
+            existing.JoinedUtc ??= DateTime.UtcNow;
+        }
+
+        await _participantRepository.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Participant {UserId} joined meeting {MeetingId}", userId, meeting.Id);
+    }
+
+    private async Task HandleParticipantLeftAsync(LiveKitWebhookEventDto payload, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(payload.Room?.Name) ||
+            string.IsNullOrWhiteSpace(payload.Participant?.Identity))
+        {
+            return;
+        }
+
+        var meeting = await _dbContext.Meetings
+            .FirstOrDefaultAsync(m => m.LiveKitRoomName == payload.Room.Name, ct);
+
+        if (meeting is null)
+        {
+            return;
+        }
+
+        var participant = await _participantRepository.GetByMeetingAndUserAsync(meeting.Id, payload.Participant.Identity, ct);
+        if (participant is null)
+        {
+            _logger.LogWarning("participant_left for unknown participant {UserId} in room {RoomName}",
+                payload.Participant.Identity, payload.Room.Name);
+            return;
+        }
+
+        participant.LeftUtc = DateTime.UtcNow;
+        await _participantRepository.SaveChangesAsync(ct);
+
+        _logger.LogInformation("Participant {UserId} left meeting {MeetingId}", participant.UserId, meeting.Id);
     }
 }

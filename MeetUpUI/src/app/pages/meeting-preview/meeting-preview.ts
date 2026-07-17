@@ -13,7 +13,6 @@ import { MeetingMediaService } from '../../services/meeting-media.service';
 export class MeetingPreviewPage implements AfterViewInit, OnDestroy {
   private readonly router = inject(Router);
   private readonly meetingMediaService = inject(MeetingMediaService);
-  private keepMediaForMeeting = false;
 
   @ViewChild('previewVideo', { static: true })
   previewVideoRef!: ElementRef<HTMLVideoElement>;
@@ -33,9 +32,10 @@ export class MeetingPreviewPage implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    if (!this.keepMediaForMeeting) {
-      this.meetingMediaService.stopStream();
-    }
+    // The meeting room acquires its own camera/mic via LiveKit, so the
+    // preview's stream is never reused — always release it here, otherwise
+    // it keeps the camera/mic hardware busy in the background indefinitely.
+    this.meetingMediaService.stopStream();
   }
 
   async startPreview(): Promise<void> {
@@ -49,16 +49,19 @@ export class MeetingPreviewPage implements AfterViewInit, OnDestroy {
   }
 
   toggleCamera(): void {
-    this.meetingMediaService.toggleCamera();
+    void this.meetingMediaService.toggleCamera();
   }
 
   toggleMic(): void {
-    this.meetingMediaService.toggleMic();
+    void this.meetingMediaService.toggleMic();
   }
 
   joinNow(): void {
-    this.keepMediaForMeeting = true;
-    this.router.navigate(['/meet'], { state: { source: 'join-now', autoStartMedia: true } });
+    // Release the preview's camera/mic now — the meeting room acquires its
+    // own via LiveKit, so keeping this stream alive would just leave the
+    // hardware running in the background with nothing using it.
+    this.meetingMediaService.stopStream();
+    this.router.navigate(['/meet'], { state: { source: 'join-now' } });
   }
 
   cancel(): void {

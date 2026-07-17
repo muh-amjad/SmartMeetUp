@@ -16,6 +16,9 @@ public sealed class LiveKitWebhookEventDto
     [JsonPropertyName("room")]
     public RoomInfoDto? Room { get; set; }
 
+    [JsonPropertyName("participant")]
+    public ParticipantInfoDto? Participant { get; set; }
+
     /// <summary>Egress info — populated for egress_* events (Phase 3).</summary>
     [JsonPropertyName("egressInfo")]
     public EgressInfoDto? EgressInfo { get; set; }
@@ -38,6 +41,21 @@ public sealed class RoomInfoDto
     [JsonPropertyName("creationTime")]
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public long CreationTime { get; set; }
+}
+
+public sealed class ParticipantInfoDto
+{
+    /// <summary>Participant identity — corresponds to AspNetUsers.Id (we set it in AccessToken.WithIdentity).</summary>
+    [JsonPropertyName("identity")]
+    public string Identity { get; set; } = string.Empty;
+
+    /// <summary>Display name — we set it via AccessToken.WithName (usually username).</summary>
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>LiveKit-generated stable id, useful for debugging.</summary>
+    [JsonPropertyName("sid")]
+    public string Sid { get; set; } = string.Empty;
 }
 
 public sealed class EgressInfoDto

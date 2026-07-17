@@ -19,12 +19,10 @@ export class MeetingMediaService {
       audio: true,
     });
 
-    stream.getVideoTracks().forEach((track) => {
-      track.enabled = this.isCameraOn();
-    });
-    stream.getAudioTracks().forEach((track) => {
-      track.enabled = this.isMicOn();
-    });
+    // Acquiring the stream actually starts the hardware, so reflect that in
+    // the toggle state instead of leaving it out of sync with reality.
+    this.isCameraOn.set(true);
+    this.isMicOn.set(true);
 
     this.streamState.set(stream);
     return stream;
@@ -41,32 +39,49 @@ export class MeetingMediaService {
     }
   }
 
-  toggleCamera(): void {
-    const next = !this.isCameraOn();
-    this.isCameraOn.set(next);
-
+  /** Turning the camera off stops the underlying hardware track so the OS
+   *  camera indicator actually turns off — merely disabling a track keeps
+   *  the device capturing. Turning back on re-acquires a fresh track, since
+   *  a stopped MediaStreamTrack can never be restarted. */
+  async toggleCamera(): Promise<void> {
     const stream = this.streamState();
     if (!stream) {
+      this.isCameraOn.set(!this.isCameraOn());
       return;
     }
 
-    stream.getVideoTracks().forEach((track) => {
-      track.enabled = next;
-    });
+    if (this.isCameraOn()) {
+      stream.getVideoTracks().forEach((track) => {
+        track.stop();
+        stream.removeTrack(track);
+      });
+      this.isCameraOn.set(false);
+    } else {
+      const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stream.addTrack(videoStream.getVideoTracks()[0]);
+      this.isCameraOn.set(true);
+    }
   }
 
-  toggleMic(): void {
-    const next = !this.isMicOn();
-    this.isMicOn.set(next);
-
+  /** Same hardware-release guarantee as toggleCamera, for the microphone. */
+  async toggleMic(): Promise<void> {
     const stream = this.streamState();
     if (!stream) {
+      this.isMicOn.set(!this.isMicOn());
       return;
     }
 
-    stream.getAudioTracks().forEach((track) => {
-      track.enabled = next;
-    });
+    if (this.isMicOn()) {
+      stream.getAudioTracks().forEach((track) => {
+        track.stop();
+        stream.removeTrack(track);
+      });
+      this.isMicOn.set(false);
+    } else {
+      const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.addTrack(audioStream.getAudioTracks()[0]);
+      this.isMicOn.set(true);
+    }
   }
 
   stopStream(): void {
