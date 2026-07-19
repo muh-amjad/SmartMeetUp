@@ -11,6 +11,7 @@
         <button type="button" class="primary" (click)="startInstantMeeting()">
           Instant Meeting
         </button>
+        <button type="button" class="secondary" (click)="goToHistory()">My Meetings</button>
       }
       @if (dashboardMode() === 'call') {
         <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
@@ -86,6 +87,7 @@
       }
 
       @if (dashboardMode() === 'call') {
+        <div class="stage-with-chat">
         <section class="meeting-stage">
           @if (mediaError()) {
             <p class="media-error">{{ mediaError() }}</p>
@@ -130,10 +132,48 @@
           </article>
         </section>
 
-        @if (isRecording()) {
+              <!-- Chat side panel -->
+          @if (chatOpen()) {
+            <aside class="chat-panel">
+              <header class="chat-header">
+                <h3>Chat</h3>
+                <button type="button" class="chat-close" (click)="toggleChat()" aria-label="Close chat">✕</button>
+              </header>
+
+              <div class="chat-messages">
+                @if (!chatMessages().length) {
+                  <p class="chat-empty">No messages yet. Say hi!</p>
+                }
+                @for (msg of chatMessages(); track trackByChatId($index, msg)) {
+                  <div class="chat-message" [class.chat-mine]="isMyMessage(msg)">
+                    <div class="chat-meta">
+                      <span class="chat-sender">{{ msg.senderUsername }}</span>
+                      <span class="chat-time">{{ formatChatTime(msg.sentUtc) }}</span>
+                    </div>
+                    <div class="chat-text">{{ msg.text }}</div>
+                  </div>
+                }
+              </div>
+
+              <form class="chat-input" (ngSubmit)="sendChat()">
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  [value]="chatDraft()"
+                  (input)="chatDraft.set($any($event.target).value)"
+                  maxlength="2000"
+                />
+                <button type="submit" [disabled]="!chatDraft().trim()">Send</button>
+              </form>
+            </aside>
+          }
+        </div>
+
+        
+        <div class="meeting-controls">
+          @if (isRecording()) {
           <div class="recording-indicator">● REC</div>
         }
-        <div class="meeting-controls">
           <button type="button" class="secondary" (click)="toggleCamera()">
             {{ isCameraOn ? 'Camera Off' : 'Camera On' }}
           </button>

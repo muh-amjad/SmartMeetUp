@@ -53,12 +53,29 @@ export class LivekitMeetingService {
 
     this.wireEvents(room);
 
-    // 3. Connect + publish local camera + mic
-    // await room.connect(response.livekitWsUrl, response.livekitToken);
-    // await room.localParticipant.enableCameraAndMicrophone();
-        // 3. Connect + publish local camera + mic (graceful fallback if devices busy)
-    await room.connect(response.livekitWsUrl, response.livekitToken);
+    // 3. Connect. LiveKit's default peerConnectionTimeout (15s) is too tight
+    // for this environment — ICE/DTLS negotiation through Docker Desktop's
+    // NAT (see docker-compose.yml) routinely takes longer than that even
+    // though it does complete, so connect() rejects with "could not
+    // establish pc connection" moments before the peer connection actually
+    // comes up. Give it real breathing room instead of just papering over a
+    // too-short timeout.
+    try {
+      await room.connect(response.livekitWsUrl, response.livekitToken, {
+        peerConnectionTimeout: 30_000,
+        websocketTimeout: 30_000,
+      });
+    } catch (err) {
+      console.warn('LiveKit connect() rejected; waiting to see if the room recovers', err);
+      const recovered = await this.waitForConnected(room, 8000);
+      if (!recovered) {
+        room.disconnect();
+        throw err;
+      }
+      console.info('LiveKit connection recovered after a transient error');
+    }
 
+    // 4. Publish local camera + mic (graceful fallback if devices busy)
     try {
       await room.localParticipant.enableCameraAndMicrophone();
     } catch (err) {
@@ -159,6 +176,37 @@ export class LivekitMeetingService {
   }
 
   // ── Internal wiring ─────────────────────────────────────
+
+  /** Resolves true as soon as `room` reaches Connected, false if it instead
+   *  settles on Disconnected or the timeout elapses first. Relies on the
+   *  ConnectionStateChanged listener already attached by wireEvents(). */
+  private waitForConnected(room: Room, timeoutMs: number): Promise<boolean> {
+    if (room.state === ConnectionState.Connected) {
+      return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+      const onStateChanged = (state: ConnectionState) => {
+        if (state === ConnectionState.Connected) {
+          cleanup();
+          resolve(true);
+        } else if (state === ConnectionState.Disconnected) {
+          cleanup();
+          resolve(false);
+        }
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        room.off(RoomEvent.ConnectionStateChanged, onStateChanged);
+      };
+
+      room.on(RoomEvent.ConnectionStateChanged, onStateChanged);
+    });
+  }
 
   private wireEvents(room: Room): void {
     room

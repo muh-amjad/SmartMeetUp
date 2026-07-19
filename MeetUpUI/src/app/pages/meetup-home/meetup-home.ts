@@ -12,7 +12,7 @@ import {
   signal,
   ViewChild,
 } from '@angular/core';
-import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { gsap } from 'gsap';
 import { firstValueFrom } from 'rxjs';
@@ -25,13 +25,14 @@ import { MeetingApiService } from '../../services/meeting-api.service';
 import { SignalrService } from '../../services/signalr.service';
 import { UserDirectoryService } from '../../services/user-directory.service';
 import { UsersFacade } from '../../store/facades/users.facade';
+import { ChatMessageDto } from '../../dtos/meetings/chat-message.dto';
 
 @Component({
   selector: 'app-meetup-home',
   standalone: true,
   templateUrl: './meetup-home.html',
   styleUrl: './meetup-home.css',
-  imports: [CommonModule, ReactiveFormsModule],
+  imports: [CommonModule, FormsModule, ReactiveFormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
@@ -77,6 +78,9 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   readonly localParticipant = this.livekit.localParticipant;
   readonly currentMeetingId = this.livekit.currentMeetingId;
   readonly isRecording = this.livekit.isRecording;
+    readonly chatMessages = signal<ChatMessageDto[]>([]);
+  readonly chatDraft = signal('');
+  readonly chatOpen = signal(true);   // toggle chat panel visibility
 
   readonly onlineUsers = computed(() => {
     const myConnectionId = this.currentUserConnectionId();
@@ -127,6 +131,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
         try {
           await this.livekit.joinMeeting(meetingId);
           await this.signalRService.setInCall(meetingId);
+          await this.loadChatHistory(meetingId);
         } catch (err) {
           this.mediaError.set('Could not join meeting. Please try again.');
           console.error('joinMeeting failed', err);
@@ -138,6 +143,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
           await this.router.navigate(['/meet', created.meetingId], { replaceUrl: true });
           await this.livekit.joinMeeting(created.meetingId);
           await this.signalRService.setInCall(created.meetingId);
+          await this.loadChatHistory(created.meetingId);
         } catch (err) {
           this.mediaError.set('Could not start meeting.');
           console.error('startInstantMeeting failed', err);
@@ -221,6 +227,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
         // Already in call mode — join directly
         await this.livekit.joinMeeting(meeting.meetingId);
         await this.signalRService.setInCall(meeting.meetingId);
+        await this.loadChatHistory(meeting.meetingId);
       }
     } catch (err) {
       this.ringingMessage.set('');
@@ -237,6 +244,8 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     await this.signalRService.setLeftCall();
     this.ringingMessage.set('');
     this.incomingInvite.set(null);
+    this.chatMessages.set([]);
+    this.chatDraft.set('');
 
     // If the host wants to explicitly close the room for everyone, uncomment:
     // if (meetingId && this.livekit.isHost()) {
@@ -256,6 +265,10 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
 
   goHome(): void {
     this.router.navigate(['/']);
+  }
+
+  goToHistory(): void {
+    this.router.navigate(['/meetings']);
   }
 
   openSupport(): void {
@@ -297,16 +310,12 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     }
 
     if (this.dashboardMode() === 'dashboard') {
-      // Navigate to /meet/:meetingId — ngOnInit will pick meetingId from URL and join
-      this.router.navigate(['/meet', invite.meetingId]);
+      // Navigate to /meet/:meetingId — ngOnInit there reads the meetingId from
+      // the URL and calls joinMeeting() itself. Don't ALSO join here: both
+      // calls would race to connect() the same singleton LivekitMeetingService
+      // for the same participant, and one connection attempt loses.
       void this.signalRService.respondToInvite(invite.inviteId, true);
-      void this.livekit
-      .joinMeeting(invite.meetingId)
-      .then(() => this.signalRService.setInCall(invite.meetingId))   // ← naya .then
-      .catch((err) => {
-        this.mediaError.set('Could not join the call.');
-        console.error('acceptIncomingCall failed', err);
-      });
+      this.router.navigate(['/meet', invite.meetingId]);
       this.incomingInvite.set(null);
       return;
     }
@@ -381,6 +390,52 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     return participant.name || participant.identity;
   }
 
+    /** Load chat history for the given meeting into the signal. */
+  private async loadChatHistory(meetingId: string): Promise<void> {
+    try {
+      const history = await firstValueFrom(this.meetingApi.getChat(meetingId));
+      this.chatMessages.set(history);
+    } catch (err) {
+      console.warn('Could not load chat history', err);
+      this.chatMessages.set([]);
+    }
+  }
+
+  toggleChat(): void {
+    this.chatOpen.update((v) => !v);
+  }
+
+  async sendChat(): Promise<void> {
+    const text = this.chatDraft().trim();
+    const meetingId = this.currentMeetingId();
+    if (!text || !meetingId) {
+      return;
+    }
+
+    try {
+      await this.signalRService.sendChatMessage(meetingId, text);
+      this.chatDraft.set('');
+    } catch (err) {
+      console.error('sendChat failed', err);
+    }
+  }
+
+  trackByChatId(_: number, item: ChatMessageDto): string {
+    return item.id;
+  }
+
+  formatChatTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  isMyMessage(msg: ChatMessageDto): boolean {
+    // Compare against the current app user id from AuthService if available; fallback:
+    // messages sent by us have senderUserId == our AspNetUsers.Id which SignalRService
+    // does not expose. Simplest visual cue: compare senderUsername with current username.
+    return msg.senderUsername === this.currentUsername();
+  }
+
   private bindSignalrCallbacks(): void {
     this.signalRService.setCallbacks({
       onIncomingInvite: (payload) => {
@@ -410,6 +465,18 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       onCallFailed: (message) => {
         this.ringingMessage.set('');
         window.alert(message);
+      },
+      onChatMessageReceived: (payload) => {
+        this.chatMessages.update((list) => [
+          ...list,
+          {
+            id: payload.id,
+            senderUserId: payload.senderUserId,
+            senderUsername: payload.senderUsername,
+            text: payload.text,
+            sentUtc: payload.sentUtc,
+          },
+        ]);
       },
     });
   }

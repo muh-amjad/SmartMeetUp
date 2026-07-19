@@ -28,6 +28,15 @@ export type InviteDeclinedPayload = {
   declinedByUsername: string;
 };
 
+export type ChatMessageReceivedPayload = {
+  id: string;
+  meetingId: string;
+  senderUserId: string;
+  senderUsername: string;
+  text: string;
+  sentUtc: string;
+};
+
 export type InviteAcceptedPayload = {
   inviteId: string;
   meetingId: string;
@@ -41,6 +50,7 @@ export type SignalRCallbacks = {
   onInviteDeclined?: (payload: InviteDeclinedPayload) => void;
   onInviteAccepted?: (payload: InviteAcceptedPayload) => void;
   onCallFailed?: (message: string) => void;
+  onChatMessageReceived?: (payload: ChatMessageReceivedPayload) => void;
 };
 
 /**
@@ -159,6 +169,14 @@ export class SignalrService {
     await this.hubConnection.invoke('SetLeftCall');
   }
 
+    /** Send a chat message to the current meeting (hub persists + broadcasts). */
+  async sendChatMessage(meetingId: string, text: string): Promise<void> {
+    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
+      return;
+    }
+    await this.hubConnection.invoke('SendChatMessage', meetingId, text);
+  }
+
   attachSignalRHandlers(): void {
     if (this.handlersAttached) {
       return;
@@ -196,6 +214,10 @@ export class SignalrService {
 
     this.hubConnection.on('CallFailed', (message: string) => {
       this.callbacks.onCallFailed?.(message);
+    });
+
+    this.hubConnection.on('ChatMessageReceived', (payload: ChatMessageReceivedPayload) => {
+      this.callbacks.onChatMessageReceived?.(payload);
     });
 
     this.handlersAttached = true;

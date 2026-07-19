@@ -1,8 +1,10 @@
-﻿using System.Security.Claims;
-using MeetUp.Api.Dtos;
+﻿using MeetUp.Api.Dtos;
+using MeetUp.Api.Entities;
+using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using System.Security.Claims;
 
 namespace MeetUp.Api.Hubs;
 
@@ -16,11 +18,19 @@ namespace MeetUp.Api.Hubs;
 public class MeetingHub : Hub
 {
     private readonly IPresenceTracker _presenceTracker;
+    private readonly IChatMessageRepository _chatMessageRepository;
     private readonly ILogger<MeetingHub> _logger;
 
-    public MeetingHub(IPresenceTracker presenceTracker, ILogger<MeetingHub> logger)
+    private const int MaxChatMessageLength = 2000;
+    private static string GroupName(Guid meetingId) => $"meeting-{meetingId:N}";
+
+    public MeetingHub(
+    IPresenceTracker presenceTracker,
+    IChatMessageRepository chatMessageRepository,
+    ILogger<MeetingHub> logger)
     {
         _presenceTracker = presenceTracker;
+        _chatMessageRepository = chatMessageRepository;
         _logger = logger;
     }
 
@@ -183,6 +193,14 @@ public class MeetingHub : Hub
         user.IsInCall = true;
         user.RoomId = meetingId;
         _presenceTracker.UpsertUser(user);
+
+        // Add the connection to this meeting's SignalR group so it receives
+        // chat + future room-scoped events.
+        if (Guid.TryParse(meetingId, out var meetingGuid))
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(meetingGuid));
+        }
+
         await BroadcastUsersAsync();
     }
 
@@ -197,9 +215,75 @@ public class MeetingHub : Hub
             return;
         }
 
+        // Capture the group before we clear it
+        var previousRoomId = user.RoomId;
+
         user.IsInCall = false;
         user.RoomId = null;
         _presenceTracker.UpsertUser(user);
+
+        if (Guid.TryParse(previousRoomId, out var previousMeetingGuid))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(previousMeetingGuid));
+        }
+
         await BroadcastUsersAsync();
+    }
+
+    /// <summary>
+    /// Persist a chat message and broadcast it to all connections in the
+    /// meeting's SignalR group. Sender must currently be in this meeting
+    /// (per PresenceTracker) — otherwise the call is silently dropped.
+    /// </summary>
+    public async Task SendChatMessage(Guid meetingId, string text)
+    {
+        // Basic sanity checks (defensive against malicious clients)
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var trimmed = text.Trim();
+        if (trimmed.Length > MaxChatMessageLength)
+        {
+            trimmed = trimmed[..MaxChatMessageLength];  // truncate, don't reject
+        }
+
+        if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var user))
+        {
+            return;
+        }
+
+        // User must be currently in this meeting to chat in it
+        if (!string.Equals(user.RoomId, meetingId.ToString(), StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "SendChatMessage rejected: user {UserId} not in meeting {MeetingId} (RoomId={RoomId})",
+                user.AppUserId, meetingId, user.RoomId);
+            return;
+        }
+
+        var message = new ChatMessage
+        {
+            Id = Guid.NewGuid(),
+            MeetingId = meetingId,
+            SenderUserId = user.AppUserId,
+            Text = trimmed,
+            SentUtc = DateTime.UtcNow,
+        };
+
+        await _chatMessageRepository.AddAsync(message, Context.ConnectionAborted);
+        await _chatMessageRepository.SaveChangesAsync(Context.ConnectionAborted);
+
+        // Broadcast to everyone currently in this meeting
+        await Clients.Group(GroupName(meetingId)).SendAsync("ChatMessageReceived", new
+        {
+            id = message.Id,
+            meetingId,
+            senderUserId = user.AppUserId,
+            senderUsername = user.Username,
+            text = message.Text,
+            sentUtc = message.SentUtc,
+        });
     }
 }

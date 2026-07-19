@@ -1,0 +1,60 @@
+<div class="history-shell">
+  <header class="history-header">
+    <div>
+      <p class="kicker">MeetUp Workbench</p>
+      <h1>Your Meetings</h1>
+      <p class="hint">All meetings you hosted or attended.</p>
+    </div>
+    <button type="button" class="secondary" (click)="backToDashboard()">← Dashboard</button>
+  </header>
+
+  @if (loading()) {
+    <p class="loading">Loading meetings...</p>
+  }
+
+  @if (errorMessage()) {
+    <p class="error">{{ errorMessage() }}</p>
+  }
+
+  @if (!loading() && !meetings().length) {
+    <div class="empty-state">
+      <h3>No meetings yet</h3>
+      <p>Start an instant meeting from the dashboard to see it here.</p>
+    </div>
+  }
+
+  @if (meetings().length) {
+    <table class="meetings-table">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Ended</th>
+          <th>Participants</th>
+          <th>Role</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (m of meetings(); track m.meetingId) {
+          <tr>
+            <td class="title">{{ m.title }}</td>
+            <td>
+              <span class="status-badge" [class]="statusClass(m.status)">{{ m.status }}</span>
+            </td>
+            <td>{{ m.actualStartUtc ? (m.actualStartUtc | date:'short') : '—' }}</td>
+            <td>{{ m.endedUtc ? (m.endedUtc | date:'short') : '—' }}</td>
+            <td>{{ m.participantCount }}</td>
+            <td>{{ m.isHost ? 'Host' : 'Participant' }}</td>
+            <td>
+              <button type="button" (click)="openMeeting(m)">
+                {{ m.status === 'Live' ? 'Rejoin' : 'View' }}
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+</div>
