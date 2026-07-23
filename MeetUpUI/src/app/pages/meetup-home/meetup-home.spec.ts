@@ -4,26 +4,26 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { of } from 'rxjs';
 import { vi } from 'vitest';
 import { AuthService } from '../../services/auth.service';
-import { MeetingMediaService } from '../../services/meeting-media.service';
+import { LivekitMeetingService } from '../../services/livekit-meeting.service';
+import { MeetingApiService } from '../../services/meeting-api.service';
 import { SignalrService } from '../../services/signalr.service';
 import { UserDirectoryService } from '../../services/user-directory.service';
-import { CallFacade } from '../../store/facades/call.facade';
 import { UsersFacade } from '../../store/facades/users.facade';
 import { MeetupHome } from './meetup-home';
 
 describe('MeetupHome', () => {
   let component: MeetupHome;
   let fixture: ComponentFixture<MeetupHome>;
-  let peerServiceStub: {
-    remoteVideos: ReturnType<typeof signal>;
-    configure: ReturnType<typeof vi.fn>;
-    cleanupAll: ReturnType<typeof vi.fn>;
-    updateRemoteMediaState: ReturnType<typeof vi.fn>;
-    syncParticipants: ReturnType<typeof vi.fn>;
-    syncAudioSenderState: ReturnType<typeof vi.fn>;
-    handleAnswer: ReturnType<typeof vi.fn>;
-    handleOffer: ReturnType<typeof vi.fn>;
-    handleCandidate: ReturnType<typeof vi.fn>;
+  let signalrStub: {
+    connectionId: string;
+    setCallbacks: ReturnType<typeof vi.fn>;
+    attachSignalRHandlers: ReturnType<typeof vi.fn>;
+    connectAndJoin: ReturnType<typeof vi.fn>;
+    inviteToMeeting: ReturnType<typeof vi.fn>;
+    setInCall: ReturnType<typeof vi.fn>;
+    setLeftCall: ReturnType<typeof vi.fn>;
+    sendChatMessage: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -32,35 +32,30 @@ describe('MeetupHome', () => {
       updateUserList: vi.fn(),
     };
 
-    const callFacadeStub = {
-      updateCallState: vi.fn(),
-    };
-
-    const signalrStub = {
+    signalrStub = {
       connectionId: 'self-connection',
       setCallbacks: vi.fn(),
       attachSignalRHandlers: vi.fn(),
       connectAndJoin: vi.fn().mockResolvedValue(undefined),
-      startInstantMeeting: vi.fn().mockResolvedValue(undefined),
-      startCall: vi.fn().mockResolvedValue(undefined),
-      respondToCall: vi.fn().mockResolvedValue(undefined),
-      leaveCall: vi.fn().mockResolvedValue(undefined),
-      sendIceCandidate: vi.fn().mockResolvedValue(undefined),
-      sendMediaState: vi.fn().mockResolvedValue(undefined),
-      sendCallOffer: vi.fn().mockResolvedValue(undefined),
-      sendCallAnswer: vi.fn().mockResolvedValue(undefined),
+      inviteToMeeting: vi.fn().mockResolvedValue(undefined),
+      setInCall: vi.fn().mockResolvedValue(undefined),
+      setLeftCall: vi.fn().mockResolvedValue(undefined),
+      sendChatMessage: vi.fn().mockResolvedValue(undefined),
       disconnect: vi.fn().mockResolvedValue(undefined),
     };
 
-    const meetingMediaStub = {
-      localStream: signal<MediaStream | null>(null),
-      ensureLocalStream: vi.fn().mockResolvedValue(undefined),
-      attachStream: vi.fn().mockResolvedValue(undefined),
-      stopStream: vi.fn(),
-      toggleCamera: vi.fn(),
-      toggleMic: vi.fn(),
-      isCameraOn: signal(true),
-      isMicOn: signal(true),
+    const livekitStub = {
+      remoteParticipants: signal([]),
+      localParticipant: signal(null),
+      currentMeetingId: signal<string | null>(null),
+      isRecording: signal(false),
+      joinMeeting: vi.fn().mockResolvedValue(undefined),
+      leaveMeeting: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const meetingApiStub = {
+      create: vi.fn(),
+      join: vi.fn(),
     };
 
     const authServiceStub = {
@@ -76,29 +71,22 @@ describe('MeetupHome', () => {
       navigate: vi.fn().mockResolvedValue(true),
     };
 
-    peerServiceStub = {
-      remoteVideos: signal([]),
-      configure: vi.fn(),
-      cleanupAll: vi.fn(),
-      updateRemoteMediaState: vi.fn(),
-      syncParticipants: vi.fn().mockResolvedValue(undefined),
-      syncAudioSenderState: vi.fn().mockResolvedValue(undefined),
-      handleAnswer: vi.fn().mockResolvedValue(undefined),
-      handleOffer: vi.fn().mockResolvedValue(undefined),
-      handleCandidate: vi.fn().mockResolvedValue(undefined),
-    };
-
     await TestBed.configureTestingModule({
       imports: [MeetupHome],
       providers: [
         { provide: UsersFacade, useValue: usersFacadeStub },
-        { provide: CallFacade, useValue: callFacadeStub },
         { provide: SignalrService, useValue: signalrStub },
-        { provide: MeetingMediaService, useValue: meetingMediaStub },
+        { provide: LivekitMeetingService, useValue: livekitStub },
+        { provide: MeetingApiService, useValue: meetingApiStub },
         { provide: AuthService, useValue: authServiceStub },
         { provide: UserDirectoryService, useValue: userDirectoryStub },
         { provide: Router, useValue: routerStub },
-        { provide: ActivatedRoute, useValue: { snapshot: { data: { mode: 'call' } } } },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: { data: { mode: 'call' }, paramMap: { get: () => null } },
+          },
+        },
       ],
     }).compileComponents();
 
@@ -110,13 +98,17 @@ describe('MeetupHome', () => {
     expect(component).toBeTruthy();
   });
 
-  
-  it('configures the peer service with signalling callbacks', () => {
-    expect(peerServiceStub.configure).toHaveBeenCalledTimes(1);
-    const callbacks = peerServiceStub.configure.mock.calls[0][0];
-    expect(typeof callbacks.sendOffer).toBe('function');
-    expect(typeof callbacks.sendAnswer).toBe('function');
-    expect(typeof callbacks.sendIceCandidate).toBe('function');
-    expect(typeof callbacks.resolveRemoteUsername).toBe('function');
+  it('wires SignalR callback handlers and joins the hub on init', async () => {
+    await component.ngOnInit();
+
+    expect(signalrStub.setCallbacks).toHaveBeenCalledTimes(1);
+    const callbacks = signalrStub.setCallbacks.mock.calls[0][0];
+    expect(typeof callbacks.onIncomingInvite).toBe('function');
+    expect(typeof callbacks.onInviteDeclined).toBe('function');
+    expect(typeof callbacks.onInviteAccepted).toBe('function');
+    expect(typeof callbacks.onCallFailed).toBe('function');
+
+    expect(signalrStub.attachSignalRHandlers).toHaveBeenCalledTimes(1);
+    expect(signalrStub.connectAndJoin).toHaveBeenCalledTimes(1);
   });
 });

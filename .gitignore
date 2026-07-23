@@ -88,3 +88,9 @@ TestResults/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local TLS dev certs / private keys — never commit these
+*.pfx
+*.key
+*.pem
+/MeetUpUI/ssl/

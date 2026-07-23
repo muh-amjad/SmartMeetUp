@@ -24,7 +24,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'dotnet run --project d:/MeetUpProject/MeetUpApi/MeetUp.Api/MeetUp.Api.csproj --urls https://localhost:7248',
+      command: 'dotnet run --project d:/SmartMeetUp/SmartMeetUp/MeetUpApi/MeetUp.Api/MeetUp.Api.csproj --urls https://localhost:7248',
       url: 'https://localhost:7248/swagger/index.html',
       reuseExistingServer: true,
       timeout: 120_000,
@@ -33,7 +33,7 @@ export default defineConfig({
     {
       command: 'npm run start -- --host localhost --port 4200',
       url: 'http://localhost:4200',
-      cwd: 'd:/MeetUpProject/MeetUpUI',
+      cwd: 'd:/SmartMeetUp/SmartMeetUp/MeetUpUI',
       reuseExistingServer: true,
       timeout: 120_000,
     },
