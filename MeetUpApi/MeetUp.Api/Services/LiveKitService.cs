@@ -7,16 +7,27 @@ namespace MeetUp.Api.Services;
 public sealed class LiveKitService : ILiveKitService
 {
     private readonly LiveKitOptions _options;
+    private readonly BlobStorageOptions _blobOptions;
     private readonly ILogger<LiveKitService> _logger;
     private readonly RoomServiceClient _roomClient;
+    private readonly EgressServiceClient _egressClient;
 
-    public LiveKitService(IOptions<LiveKitOptions> options, ILogger<LiveKitService> logger)
+    public LiveKitService(
+        IOptions<LiveKitOptions> options,
+        IOptions<BlobStorageOptions> blobOptions,
+        ILogger<LiveKitService> logger)
     {
         _options = options.Value;
+        _blobOptions = blobOptions.Value;
         _logger = logger;
 
         // Admin REST client — talks to LiveKit's /twirp/livekit.RoomService endpoints
         _roomClient = new RoomServiceClient(
+            _options.HttpUrl,
+            _options.ApiKey,
+            _options.ApiSecret);
+
+        _egressClient = new EgressServiceClient(
             _options.HttpUrl,
             _options.ApiKey,
             _options.ApiSecret);
@@ -73,6 +84,55 @@ public sealed class LiveKitService : ILiveKitService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to delete LiveKit room {RoomName} (may already be gone)", roomName);
+        }
+    }
+
+    public async Task<string> StartCompositeEgressAsync(string roomName, string outputKey, CancellationToken ct)
+    {
+        var request = new RoomCompositeEgressRequest
+        {
+            RoomName = roomName,
+            AudioOnly = true,
+            // OGG container defaults to Opus audio — no separate codec field needed
+            // for the audio-only room-composite request itself.
+            FileOutputs =
+            {
+                new EncodedFileOutput
+                {
+                    FileType = EncodedFileType.Ogg,
+                    Filepath = outputKey,
+                    S3 = new S3Upload
+                    {
+                        AccessKey = _blobOptions.AccessKey,
+                        Secret = _blobOptions.SecretKey,
+                        Bucket = _blobOptions.BucketName,
+                        Region = _blobOptions.Region,
+                        // The egress worker runs in Docker, so it needs the compose-network
+                        // endpoint here, not whatever address the API process itself uses.
+                        Endpoint = _blobOptions.EgressServiceUrl,
+                        ForcePathStyle = _blobOptions.ForcePathStyle,
+                    },
+                },
+            },
+        };
+
+        var info = await _egressClient.StartRoomCompositeEgress(request);
+        _logger.LogInformation("Started egress {EgressId} for room {RoomName} -> {OutputKey}",
+            info.EgressId, roomName, outputKey);
+
+        return info.EgressId;
+    }
+
+    public async Task StopEgressAsync(string egressId, CancellationToken ct)
+    {
+        try
+        {
+            await _egressClient.StopEgress(new StopEgressRequest { EgressId = egressId });
+            _logger.LogInformation("Stopped egress {EgressId}", egressId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to stop egress {EgressId} (may have already ended)", egressId);
         }
     }
 }

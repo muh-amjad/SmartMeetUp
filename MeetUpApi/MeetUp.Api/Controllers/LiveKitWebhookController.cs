@@ -105,9 +105,12 @@ public class LiveKitWebhookController : ControllerBase
                 break;
 
             case "egress_started":
+                _logger.LogInformation("Egress {EgressId} started for room {RoomName}",
+                    payload.EgressInfo?.EgressId, payload.EgressInfo?.RoomName);
+                break;
+
             case "egress_ended":
-                // Phase 3 will implement these
-                _logger.LogInformation("Egress event {Event} received (not yet handled)", payload.Event);
+                await HandleEgressEndedAsync(payload, ct);
                 break;
 
             case "participant_joined":
@@ -179,6 +182,54 @@ public class LiveKitWebhookController : ControllerBase
 
             _logger.LogInformation("Meeting {MeetingId} marked Processing (recording pipeline will run)", meeting.Id);
         }
+    }
+
+    private async Task HandleEgressEndedAsync(LiveKitWebhookEventDto payload, CancellationToken ct)
+    {
+        var egressId = payload.EgressInfo?.EgressId;
+        if (string.IsNullOrWhiteSpace(egressId))
+        {
+            return;
+        }
+
+        // Match on EgressId (set when we started the recording in MeetingsController.Create)
+        // rather than room name, since a room can theoretically be re-recorded.
+        var meeting = await _dbContext.Meetings
+            .FirstOrDefaultAsync(m => m.EgressId == egressId, ct);
+
+        if (meeting is null)
+        {
+            _logger.LogWarning("egress_ended for unknown egress {EgressId}", egressId);
+            return;
+        }
+
+        var fileResult = payload.EgressInfo?.FileResults.FirstOrDefault();
+        if (fileResult is not null)
+        {
+            meeting.RecordingBlobKey = fileResult.Filename;
+            meeting.RecordingDurationSeconds = (int)(fileResult.DurationNanoseconds / 1_000_000_000);
+        }
+        else
+        {
+            _logger.LogWarning("egress_ended for {EgressId} had no file results (recording may have failed)", egressId);
+        }
+
+        // room_finished already moves Live -> Processing; this just keeps it there in case
+        // egress reports back before/without a room_finished event for some reason.
+        if (meeting.Status is MeetingStatus.Live or MeetingStatus.Ended)
+        {
+            meeting.Status = MeetingStatus.Processing;
+        }
+
+        meeting.UpdatedUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(ct);
+
+        // Transcription (Phase 4) picks up from here — not implemented yet, so we stop at
+        // "recording is safely in blob storage" for now instead of enqueuing a job type
+        // that doesn't exist.
+        _logger.LogInformation(
+            "Meeting {MeetingId} recording saved: key={BlobKey}, durationSec={Duration}",
+            meeting.Id, meeting.RecordingBlobKey, meeting.RecordingDurationSeconds);
     }
 
     private async Task HandleParticipantJoinedAsync(LiveKitWebhookEventDto payload, CancellationToken ct)

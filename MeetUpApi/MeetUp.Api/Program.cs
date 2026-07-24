@@ -7,6 +7,8 @@ using MeetUp.Api.Services;
 using MeetUp.Api.Infrastructure.Middleware;
 using MeetUp.Api.Infrastructure.Logging;
 using FluentValidation;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -42,6 +44,8 @@ namespace MeetUp.Api
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
             builder.Services.Configure<MeetingOptions>(builder.Configuration.GetSection(MeetingOptions.Section));
             builder.Services.Configure<LiveKitOptions>(builder.Configuration.GetSection(LiveKitOptions.SectionName));
+            builder.Services.Configure<BlobStorageOptions>(builder.Configuration.GetSection(BlobStorageOptions.SectionName));
+            builder.Services.Configure<AdminBootstrapOptions>(builder.Configuration.GetSection(AdminBootstrapOptions.SectionName));
 
             builder.Services.AddDbContext<AppDbContext>(options =>
                 options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -68,8 +72,27 @@ namespace MeetUp.Api
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
             builder.Services.AddSingleton<ILiveKitService, LiveKitService>();
+            builder.Services.AddScoped<IBlobStorageService, S3BlobStorageService>();
             // Register FluentValidation validators
             builder.Services.AddValidatorsFromAssemblyContaining<Program>(includeInternalTypes: true);
+
+            // Skipped under the integration-test host: CustomWebApplicationFactory swaps
+            // AppDbContext to an ephemeral Testcontainers instance via ConfigureServices,
+            // which happens too late for Hangfire to pick up the same connection string here
+            // (it reads straight from configuration). None of the current tests exercise
+            // background jobs, so there's nothing lost by not standing up a server for them.
+            if (!builder.Environment.IsEnvironment("Testing"))
+            {
+                var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+                    ?? throw new InvalidOperationException("DefaultConnection is missing.");
+
+                builder.Services.AddHangfire(config => config
+                    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+                    .UseSimpleAssemblyNameTypeSerializer()
+                    .UseRecommendedSerializerSettings()
+                    .UsePostgreSqlStorage(c => c.UseNpgsqlConnection(connectionString)));
+                builder.Services.AddHangfireServer();
+            }
 
             // Register global exception handler
             builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -196,7 +219,17 @@ namespace MeetUp.Api
             app.MapHealthChecks("/health/live");
             app.MapHealthChecks("/health/ready");
 
+            if (!app.Environment.IsEnvironment("Testing"))
+            {
+                app.MapHangfireDashboard("/hangfire", new DashboardOptions
+                {
+                    Authorization = [new Infrastructure.HangfireAdminAuthFilter()],
+                });
+            }
+
             await EnsureDatabaseAsync(app.Services, app.Environment);
+            await EnsureAdminRoleAsync(app.Services, app.Environment);
+            await EnsureBlobStorageAsync(app.Services, app.Environment);
 
             await app.RunAsync();
         }
@@ -211,6 +244,69 @@ namespace MeetUp.Api
             using var scope = serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await dbContext.Database.MigrateAsync();
+        }
+
+        // Ensures the "Admin" role exists and promotes any configured bootstrap emails into it.
+        // This is the only way to get an Admin today (no promotion UI/endpoint) — needed so
+        // *someone* can pass HangfireAdminAuthFilter and open /hangfire.
+        private static async Task EnsureAdminRoleAsync(IServiceProvider serviceProvider, IWebHostEnvironment environment)
+        {
+            if (environment.IsEnvironment("Testing"))
+            {
+                return;
+            }
+
+            using var scope = serviceProvider.CreateScope();
+            var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+            var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            var bootstrapEmails = scope.ServiceProvider.GetRequiredService<IOptions<AdminBootstrapOptions>>().Value.Emails;
+
+            if (!await roleManager.RoleExistsAsync("Admin"))
+            {
+                await roleManager.CreateAsync(new IdentityRole("Admin"));
+                logger.LogInformation("Created \"Admin\" role");
+            }
+
+            foreach (var email in bootstrapEmails)
+            {
+                var user = await userManager.FindByEmailAsync(email);
+                if (user is null)
+                {
+                    logger.LogWarning("AdminBootstrap email {Email} does not match any user yet; skipping", email);
+                    continue;
+                }
+
+                if (!await userManager.IsInRoleAsync(user, "Admin"))
+                {
+                    await userManager.AddToRoleAsync(user, "Admin");
+                    logger.LogInformation("Promoted {Email} to Admin", email);
+                }
+            }
+        }
+
+        // MinIO (unlike AWS S3) does not auto-create buckets — do it once at startup.
+        private static async Task EnsureBlobStorageAsync(IServiceProvider serviceProvider, IWebHostEnvironment environment)
+        {
+            if (environment.IsEnvironment("Testing"))
+            {
+                return;
+            }
+
+            using var scope = serviceProvider.CreateScope();
+            var blobStorage = scope.ServiceProvider.GetRequiredService<IBlobStorageService>();
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+            try
+            {
+                await blobStorage.EnsureBucketExistsAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: recording just won't work until MinIO/S3 is reachable, but the
+                // rest of the app (calls, chat, etc.) shouldn't be blocked from starting.
+                logger.LogWarning(ex, "Could not verify/create the blob storage bucket at startup");
+            }
         }
     }
 

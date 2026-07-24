@@ -68,4 +68,19 @@ public sealed class EgressInfoDto
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
+
+    /// <summary>One entry per configured file output — we only ever configure one (the room recording).</summary>
+    [JsonPropertyName("fileResults")]
+    public List<EgressFileResultDto> FileResults { get; set; } = new();
+}
+
+public sealed class EgressFileResultDto
+{
+    [JsonPropertyName("filename")]
+    public string Filename { get; set; } = string.Empty;
+
+    /// <summary>Nanoseconds — LiveKit reports durations at nanosecond precision.</summary>
+    [JsonPropertyName("duration")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long DurationNanoseconds { get; set; }
 }
