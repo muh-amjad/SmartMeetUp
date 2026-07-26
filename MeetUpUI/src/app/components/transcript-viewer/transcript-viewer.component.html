@@ -1,0 +1,17 @@
+@if (!utterances().length) {
+  <p class="transcript-empty">No speech was captured in this recording.</p>
+} @else {
+  <ol class="transcript-list">
+    @for (u of utterances(); track $index) {
+      <li class="utterance">
+        <div class="utterance-meta">
+          <span class="speaker">{{ speakerName(u) }}</span>
+          <button type="button" class="timestamp" (click)="onSeek(u.startMs)">
+            {{ formatTimestamp(u.startMs) }}
+          </button>
+        </div>
+        <p class="text">{{ u.text }}</p>
+      </li>
+    }
+  </ol>
+}

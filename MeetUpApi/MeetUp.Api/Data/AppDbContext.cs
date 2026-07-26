@@ -10,6 +10,8 @@ namespace MeetUp.Api.Data
         public DbSet<Meeting> Meetings => Set<Meeting>();
         public DbSet<MeetingParticipant> MeetingParticipants => Set<MeetingParticipant>();   // ← naya
         public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+        public DbSet<Transcript> Transcripts => Set<Transcript>();
+        public DbSet<TranscriptUtterance> TranscriptUtterances => Set<TranscriptUtterance>();
 
         public AppDbContext(DbContextOptions<AppDbContext> options)
             : base(options)
@@ -114,6 +116,46 @@ namespace MeetUp.Api.Data
                     .WithMany()
                     .HasForeignKey(m => m.SenderUserId)
                     .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            builder.Entity<Transcript>(entity =>
+            {
+                entity.HasKey(t => t.Id);
+
+                entity.Property(t => t.Language)
+                    .HasMaxLength(10)
+                    .IsRequired();
+
+                // One meeting has at most one transcript (re-transcription overwrites, not appends)
+                entity.HasIndex(t => t.MeetingId)
+                    .IsUnique();
+
+                entity.HasOne(t => t.Meeting)
+                    .WithMany()
+                    .HasForeignKey(t => t.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            builder.Entity<TranscriptUtterance>(entity =>
+            {
+                entity.HasKey(u => u.Id);
+
+                entity.Property(u => u.SpeakerLabel)
+                    .HasMaxLength(10)
+                    .IsRequired();
+
+                // Ordered playback/seek lookups within a transcript
+                entity.HasIndex(u => new { u.TranscriptId, u.StartMs });
+
+                entity.HasOne(u => u.Transcript)
+                    .WithMany(t => t.Utterances)
+                    .HasForeignKey(u => u.TranscriptId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(u => u.Participant)
+                    .WithMany()
+                    .HasForeignKey(u => u.ParticipantUserId)
+                    .OnDelete(DeleteBehavior.SetNull);
             });
         }
     }

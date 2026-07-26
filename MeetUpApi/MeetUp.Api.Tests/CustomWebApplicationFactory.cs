@@ -36,6 +36,19 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
                 ["LiveKit:ApiSecret"] = "test-api-secret-must-be-32-chars-long-for-hmac-signing",
                 ["LiveKit:WsUrl"] = "ws://localhost:7880",
                 ["LiveKit:HttpUrl"] = "http://localhost:7880",
+
+                // Blob storage test values — dummy but non-empty so the AWS S3 client can be
+                // constructed. No MinIO runs in tests; the egress/recording calls that would
+                // hit it are swallowed by the controller, so tests never actually upload.
+                ["BlobStorage:ServiceUrl"] = "http://localhost:9000",
+                ["BlobStorage:EgressServiceUrl"] = "http://minio:9000",
+                ["BlobStorage:AccessKey"] = "test-access-key",
+                ["BlobStorage:SecretKey"] = "test-secret-key",
+                ["BlobStorage:BucketName"] = "test-recordings",
+                ["BlobStorage:Region"] = "us-east-1",
+                ["BlobStorage:ForcePathStyle"] = "true",
+
+                ["AssemblyAi:ApiKey"] = "test-assemblyai-key",
             });
         });
 

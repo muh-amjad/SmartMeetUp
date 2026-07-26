@@ -1,0 +1,61 @@
+<div class="detail-shell">
+  <header class="detail-header">
+    <button type="button" class="secondary" (click)="back()">← Meetings</button>
+  </header>
+
+  @if (loading()) {
+    <p class="loading">Loading meeting...</p>
+  }
+
+  @if (meeting(); as m) {
+    <section class="meeting-summary">
+      <p class="kicker">Meeting</p>
+      <h1>{{ m.title }}</h1>
+      <div class="meta-row">
+        <span class="status-badge">{{ m.status }}</span>
+        <span>{{ m.actualStartUtc ? (m.actualStartUtc | date:'medium') : 'Not started' }}</span>
+        <span>{{ m.participants.length }} participant(s)</span>
+      </div>
+      <div class="participants">
+        @for (p of m.participants; track p.userId) {
+          <span class="participant-chip">{{ p.username }}{{ p.role === 'Host' ? ' (host)' : '' }}</span>
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Recording</h2>
+      @if (recordingUrl(); as url) {
+        <audio #audioPlayer controls preload="metadata" [src]="url"></audio>
+      } @else {
+        <p class="muted">No recording is available for this meeting.</p>
+      }
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Transcript</h2>
+        @if (transcriptState() === 'unavailable' && m.isHost) {
+          <button type="button" (click)="retryTranscript()" [disabled]="retrying()">
+            {{ retrying() ? 'Retrying...' : 'Retry transcription' }}
+          </button>
+        }
+      </div>
+
+      @switch (transcriptState()) {
+        @case ('loading') {
+          <p class="muted">Loading transcript...</p>
+        }
+        @case ('ready') {
+          <app-transcript-viewer [utterances]="utterances()" (seek)="seekAudio($event)" />
+        }
+        @case ('unavailable') {
+          <p class="muted">
+            Transcript is not available yet. It is generated automatically a few minutes after a
+            recorded meeting ends.
+          </p>
+        }
+      }
+    </section>
+  }
+</div>

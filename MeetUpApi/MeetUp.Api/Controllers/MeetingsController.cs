@@ -1,7 +1,9 @@
 ﻿using System.Security.Claims;
+using Hangfire;
 using MeetUp.Api.Dtos.Meetings;
 using MeetUp.Api.Entities;
 using MeetUp.Api.Infrastructure.Exceptions;
+using MeetUp.Api.Jobs;
 using MeetUp.Api.Options;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
@@ -19,7 +21,9 @@ public class MeetingsController : ControllerBase
     private readonly IMeetingRepository _meetingRepository;
     private readonly IMeetingParticipantRepository _participantRepository;
     private readonly IChatMessageRepository _chatMessageRepository;
+    private readonly ITranscriptRepository _transcriptRepository;
     private readonly ILiveKitService _liveKitService;
+    private readonly IBlobStorageService _blobStorageService;
     private readonly LiveKitOptions _liveKitOptions;
     private readonly ILogger<MeetingsController> _logger;
 
@@ -27,14 +31,18 @@ public class MeetingsController : ControllerBase
     IMeetingRepository meetingRepository,
     IMeetingParticipantRepository participantRepository,
     IChatMessageRepository chatMessageRepository,
+    ITranscriptRepository transcriptRepository,
     ILiveKitService liveKitService,
+    IBlobStorageService blobStorageService,
     IOptions<LiveKitOptions> liveKitOptions,
     ILogger<MeetingsController> logger)
     {
         _meetingRepository = meetingRepository;
         _participantRepository = participantRepository;
         _chatMessageRepository = chatMessageRepository;
+        _transcriptRepository = transcriptRepository;
         _liveKitService = liveKitService;
+        _blobStorageService = blobStorageService;
         _liveKitOptions = liveKitOptions.Value;
         _logger = logger;
     }
@@ -338,5 +346,101 @@ public class MeetingsController : ControllerBase
             Text = m.Text,
             SentUtc = m.SentUtc,
         }).ToList());
+    }
+
+    /// <summary>Diarized transcript for a meeting, once transcription has completed.</summary>
+    [HttpGet("{id:guid}/transcript")]
+    public async Task<ActionResult<TranscriptDto>> GetTranscript(Guid id, CancellationToken ct)
+    {
+        await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        var transcript = await _transcriptRepository.GetByMeetingIdAsync(id, ct)
+            ?? throw new NotFoundException("Transcript is not available for this meeting yet.");
+
+        return Ok(new TranscriptDto
+        {
+            Language = transcript.Language,
+            Utterances = transcript.Utterances
+                .OrderBy(u => u.StartMs)
+                .Select(u => new TranscriptUtteranceDto
+                {
+                    SpeakerLabel = u.SpeakerLabel,
+                    ParticipantUserId = u.ParticipantUserId,
+                    ParticipantUsername = u.Participant?.UserName,
+                    StartMs = u.StartMs,
+                    EndMs = u.EndMs,
+                    Text = u.Text,
+                    Confidence = u.Confidence,
+                })
+                .ToList(),
+        });
+    }
+
+    /// <summary>Short-lived signed URL for playing back the meeting's recording.</summary>
+    [HttpGet("{id:guid}/recording-url")]
+    public async Task<ActionResult<RecordingUrlDto>> GetRecordingUrl(Guid id, CancellationToken ct)
+    {
+        var meeting = await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        if (string.IsNullOrWhiteSpace(meeting.RecordingBlobKey))
+        {
+            throw new NotFoundException("No recording is available for this meeting.");
+        }
+
+        var expiry = TimeSpan.FromMinutes(5);
+        var url = await _blobStorageService.GetSignedDownloadUrlAsync(meeting.RecordingBlobKey, expiry, ct);
+
+        return Ok(new RecordingUrlDto
+        {
+            Url = url,
+            ExpiresUtc = DateTime.UtcNow.Add(expiry),
+        });
+    }
+
+    /// <summary>Host-only: re-enqueues transcription after a failed run.</summary>
+    [HttpPost("{id:guid}/transcript/retry")]
+    public async Task<IActionResult> RetryTranscript(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can retry transcription.");
+        }
+
+        if (meeting.Status != MeetingStatus.Failed)
+        {
+            throw new ConflictException("Transcription can only be retried when the meeting is in a Failed state.");
+        }
+
+        BackgroundJob.Enqueue<ITranscriptionJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+
+        _logger.LogInformation("User {UserId} re-enqueued transcription for meeting {MeetingId}", userId, meeting.Id);
+        return Accepted();
+    }
+
+    /// <summary>Shared host-or-participant access check used by the transcript/recording endpoints.</summary>
+    private async Task<Meeting> EnsureCallerCanAccessMeetingAsync(Guid meetingId, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(meetingId, ct)
+            ?? throw new NotFoundException($"Meeting {meetingId} not found.");
+
+        var participants = await _participantRepository.GetByMeetingAsync(meetingId, ct);
+        var isHost = string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal);
+        var isParticipant = participants.Any(p => p.UserId == userId);
+
+        if (!isHost && !isParticipant)
+        {
+            throw new ForbiddenException("You are not part of this meeting.");
+        }
+
+        return meeting;
     }
 }

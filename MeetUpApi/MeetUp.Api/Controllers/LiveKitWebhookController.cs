@@ -1,7 +1,9 @@
-﻿using Livekit.Server.Sdk.Dotnet;
+﻿using Hangfire;
+using Livekit.Server.Sdk.Dotnet;
 using MeetUp.Api.Data;
 using MeetUp.Api.Dtos.Webhooks;
 using MeetUp.Api.Entities;
+using MeetUp.Api.Jobs;
 using MeetUp.Api.Options;
 using MeetUp.Api.Repositories;
 using Microsoft.AspNetCore.Mvc;
@@ -224,12 +226,14 @@ public class LiveKitWebhookController : ControllerBase
         meeting.UpdatedUtc = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(ct);
 
-        // Transcription (Phase 4) picks up from here — not implemented yet, so we stop at
-        // "recording is safely in blob storage" for now instead of enqueuing a job type
-        // that doesn't exist.
         _logger.LogInformation(
             "Meeting {MeetingId} recording saved: key={BlobKey}, durationSec={Duration}",
             meeting.Id, meeting.RecordingBlobKey, meeting.RecordingDurationSeconds);
+
+        if (fileResult is not null)
+        {
+            BackgroundJob.Enqueue<ITranscriptionJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+        }
     }
 
     private async Task HandleParticipantJoinedAsync(LiveKitWebhookEventDto payload, CancellationToken ct)

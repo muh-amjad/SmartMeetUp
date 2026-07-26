@@ -1,9 +1,11 @@
 
 using MeetUp.Api.Data;
 using MeetUp.Api.Entities;
+using MeetUp.Api.Jobs;
 using MeetUp.Api.Options;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
+using MeetUp.Api.Services.AssemblyAi;
 using MeetUp.Api.Infrastructure.Middleware;
 using MeetUp.Api.Infrastructure.Logging;
 using FluentValidation;
@@ -46,6 +48,7 @@ namespace MeetUp.Api
             builder.Services.Configure<LiveKitOptions>(builder.Configuration.GetSection(LiveKitOptions.SectionName));
             builder.Services.Configure<BlobStorageOptions>(builder.Configuration.GetSection(BlobStorageOptions.SectionName));
             builder.Services.Configure<AdminBootstrapOptions>(builder.Configuration.GetSection(AdminBootstrapOptions.SectionName));
+            builder.Services.Configure<AssemblyAiOptions>(builder.Configuration.GetSection(AssemblyAiOptions.SectionName));
 
             builder.Services.AddDbContext<AppDbContext>(options =>
                 options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -68,11 +71,24 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IMeetingRepository, MeetingRepository>();
             builder.Services.AddScoped<IMeetingParticipantRepository, MeetingParticipantRepository>();   // ← naya
             builder.Services.AddScoped<IChatMessageRepository, ChatMessageRepository>();                 // ← naya
+            builder.Services.AddScoped<ITranscriptRepository, TranscriptRepository>();
 
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
             builder.Services.AddSingleton<ILiveKitService, LiveKitService>();
             builder.Services.AddScoped<IBlobStorageService, S3BlobStorageService>();
+            builder.Services.AddScoped<ITranscriptionJob, TranscriptionJob>();
+
+            builder.Services.AddHttpClient<IAssemblyAiClient, AssemblyAiClient>((sp, client) =>
+            {
+                var options = sp.GetRequiredService<IOptions<AssemblyAiOptions>>().Value;
+                client.BaseAddress = new Uri(options.BaseUrl);
+                if (!string.IsNullOrWhiteSpace(options.ApiKey))
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", options.ApiKey);
+                }
+            });
+
             // Register FluentValidation validators
             builder.Services.AddValidatorsFromAssemblyContaining<Program>(includeInternalTypes: true);
 

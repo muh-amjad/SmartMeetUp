@@ -42,12 +42,11 @@ export class MeetingHistoryPage implements OnInit {
   }
 
   openMeeting(meeting: MeetingListItemDto): void {
-    // If meeting is Live, join it. Otherwise show detail (Phase 3+ mein detail page banayenge).
+    // Live/Scheduled → rejoin the call; anything ended → open the detail page (transcript, recording).
     if (meeting.status === 'Live' || meeting.status === 'Scheduled') {
       this.router.navigate(['/meet', meeting.meetingId]);
     } else {
-      // For now, just alert. Later: navigate to a detail page.
-      window.alert(`Meeting "${meeting.title}" — Status: ${meeting.status}`);
+      this.router.navigate(['/meetings', meeting.meetingId]);
     }
   }
 

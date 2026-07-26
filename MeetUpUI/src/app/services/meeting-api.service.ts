@@ -7,6 +7,7 @@ import { CreateMeetingResponseDto } from '../dtos/meetings/create-meeting-respon
 import { JoinMeetingResponseDto } from '../dtos/meetings/join-meeting-response.dto';
 import { MeetingDetailDto } from '../dtos/meetings/meeting-detail.dto';
 import { MeetingListItemDto } from '../dtos/meetings/meeting-list-item.dto';
+import { RecordingUrlDto, TranscriptDto } from '../dtos/meetings/transcript.dto';
 import { UpdateMeetingRequestDto } from '../dtos/meetings/update-meeting-request.dto';
 
 @Injectable({ providedIn: 'root' })
@@ -60,5 +61,20 @@ export class MeetingApiService {
   /** Chat message history for a meeting. */
   getChat(meetingId: string): Observable<ChatMessageDto[]> {
     return this.http.get<ChatMessageDto[]>(`${this.baseUrl}/${meetingId}/chat`);
+  }
+
+  /** Diarized transcript for a meeting (available once transcription completes). */
+  getTranscript(meetingId: string): Observable<TranscriptDto> {
+    return this.http.get<TranscriptDto>(`${this.baseUrl}/${meetingId}/transcript`);
+  }
+
+  /** Short-lived signed URL for playing back the recording. */
+  getRecordingUrl(meetingId: string): Observable<RecordingUrlDto> {
+    return this.http.get<RecordingUrlDto>(`${this.baseUrl}/${meetingId}/recording-url`);
+  }
+
+  /** Host-only: re-run transcription after a failure. */
+  retryTranscript(meetingId: string): Observable<void> {
+    return this.http.post<void>(`${this.baseUrl}/${meetingId}/transcript/retry`, {});
   }
 }
