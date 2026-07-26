@@ -19,18 +19,25 @@ public class MeetingHub : Hub
 {
     private readonly IPresenceTracker _presenceTracker;
     private readonly IChatMessageRepository _chatMessageRepository;
+    private readonly IMeetingRepository _meetingRepository;
+    private readonly IMeetingAnalyticsRepository _analyticsRepository;
     private readonly ILogger<MeetingHub> _logger;
 
     private const int MaxChatMessageLength = 2000;
+    private const int MaxSpeakingIntervalsPerCall = 200;
     private static string GroupName(Guid meetingId) => $"meeting-{meetingId:N}";
 
     public MeetingHub(
     IPresenceTracker presenceTracker,
     IChatMessageRepository chatMessageRepository,
+    IMeetingRepository meetingRepository,
+    IMeetingAnalyticsRepository analyticsRepository,
     ILogger<MeetingHub> logger)
     {
         _presenceTracker = presenceTracker;
         _chatMessageRepository = chatMessageRepository;
+        _meetingRepository = meetingRepository;
+        _analyticsRepository = analyticsRepository;
         _logger = logger;
     }
 
@@ -285,5 +292,84 @@ public class MeetingHub : Hub
             text = message.Text,
             sentUtc = message.SentUtc,
         });
+    }
+
+    /// <summary>
+    /// Records which stretches of the meeting the caller was actively speaking for, so that the
+    /// transcript's anonymous "Speaker A/B" labels can later be attributed to real accounts.
+    ///
+    /// This comes from the client rather than a LiveKit webhook because LiveKit only reports
+    /// active-speaker changes over the realtime signalling channel to connected SDKs — its webhook
+    /// payload carries no speaker information at all. The browser SDK sees these events, so the
+    /// browser reports them here.
+    ///
+    /// Intervals are always attributed to the authenticated caller, never to an id they supply,
+    /// so a client cannot fabricate speaking time for someone else.
+    /// </summary>
+    public async Task ReportSpeakingIntervals(Guid meetingId, SpeakingIntervalDto[] intervals)
+    {
+        if (intervals is null || intervals.Length == 0)
+        {
+            return;
+        }
+
+        if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var user))
+        {
+            return;
+        }
+
+        // Caller must currently be in this meeting — same rule as chat.
+        if (!string.Equals(user.RoomId, meetingId.ToString(), StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "ReportSpeakingIntervals rejected: user {UserId} not in meeting {MeetingId}",
+                user.AppUserId, meetingId);
+            return;
+        }
+
+        var ct = Context.ConnectionAborted;
+
+        var meeting = await _meetingRepository.GetByIdAsync(meetingId, ct);
+        if (meeting is null)
+        {
+            return;
+        }
+
+        // Transcript timestamps are relative to when the recording started, so rebase the client's
+        // wall clock onto the meeting's actual start. Both origins are set within a second or so of
+        // each other; speaker matching compares relative overlap, so a small shared offset washes out.
+        var origin = meeting.ActualStartUtc ?? meeting.CreatedUtc;
+
+        var rows = new List<ParticipantAudioActivity>();
+        foreach (var interval in intervals.Take(MaxSpeakingIntervalsPerCall))
+        {
+            var startMs = (int)Math.Max(0, (interval.StartedUtc - origin).TotalMilliseconds);
+            var stopMs = (int)Math.Max(0, (interval.StoppedUtc - origin).TotalMilliseconds);
+
+            if (stopMs <= startMs)
+            {
+                continue;   // clock skew or a zero-length blip — nothing useful to store
+            }
+
+            rows.Add(new ParticipantAudioActivity
+            {
+                Id = Guid.NewGuid(),
+                MeetingId = meetingId,
+                UserId = user.AppUserId,
+                StartedSpeakingMs = startMs,
+                StoppedSpeakingMs = stopMs,
+            });
+        }
+
+        if (rows.Count == 0)
+        {
+            return;
+        }
+
+        await _analyticsRepository.AddAudioActivityAsync(rows, ct);
+        await _analyticsRepository.SaveChangesAsync(ct);
+
+        _logger.LogDebug("Recorded {Count} speaking interval(s) for user {UserId} in meeting {MeetingId}",
+            rows.Count, user.AppUserId, meetingId);
     }
 }

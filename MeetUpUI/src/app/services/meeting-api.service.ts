@@ -6,6 +6,7 @@ import {
   ActionItemDto,
   DecisionDto,
   FollowUpEmailDto,
+  MeetingAnalyticsDto,
   MeetingSummaryDto,
   UpdateActionItemRequestDto,
   UpdateFollowUpEmailRequestDto,
@@ -114,6 +115,16 @@ export class MeetingApiService {
   /** Host-only: re-run AI analysis over an existing transcript. */
   retryAnalysis(meetingId: string): Observable<void> {
     return this.http.post<void>(`${this.baseUrl}/${meetingId}/analysis/retry`, {});
+  }
+
+  /** Speaking distribution and word counts for a meeting. */
+  getMeetingAnalytics(meetingId: string): Observable<MeetingAnalyticsDto> {
+    return this.http.get<MeetingAnalyticsDto>(`${this.baseUrl}/${meetingId}/analytics`);
+  }
+
+  /** Host-only: recompute speaker attribution and analytics. */
+  recomputeAnalytics(meetingId: string): Observable<void> {
+    return this.http.post<void>(`${this.baseUrl}/${meetingId}/analytics/recompute`, {});
   }
 
   /** Update an action item (status toggle, edit, reassign, due date). */

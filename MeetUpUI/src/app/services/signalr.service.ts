@@ -44,6 +44,12 @@ export type InviteAcceptedPayload = {
   acceptedByUsername: string;
 };
 
+/** A completed speaking turn, matching the server's SpeakingIntervalDto. */
+export type SpeakingInterval = {
+  startedUtc: string;
+  stoppedUtc: string;
+};
+
 export type SignalRCallbacks = {
   onIncomingInvite?: (payload: InvitePayload) => void;
   onInviteRinging?: (payload: InviteRingingPayload) => void;
@@ -175,6 +181,25 @@ export class SignalrService {
       return;
     }
     await this.hubConnection.invoke('SendChatMessage', meetingId, text);
+  }
+
+  /**
+   * Report stretches during which this client was an active speaker. LiveKit only surfaces
+   * active-speaker changes to connected SDKs — its server webhooks carry no speaker data — so the
+   * browser is the only place these events exist. The server attributes them to the authenticated
+   * caller, so no user id is sent.
+   */
+  async reportSpeakingIntervals(
+    meetingId: string,
+    intervals: SpeakingInterval[],
+  ): Promise<void> {
+    if (
+      this.hubConnection.state !== signalR.HubConnectionState.Connected ||
+      intervals.length === 0
+    ) {
+      return;
+    }
+    await this.hubConnection.invoke('ReportSpeakingIntervals', meetingId, intervals);
   }
 
   attachSignalRHandlers(): void {

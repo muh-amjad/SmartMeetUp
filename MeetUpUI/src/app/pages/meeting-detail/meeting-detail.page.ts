@@ -1,4 +1,4 @@
-import { DatePipe } from '@angular/common';
+import { DatePipe, DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -15,6 +15,7 @@ import {
   ActionItemDto,
   DecisionDto,
   FollowUpEmailDto,
+  MeetingAnalyticsDto,
   MeetingSummaryDto,
 } from '../../dtos/meetings/analysis.dto';
 import { MeetingDetailDto } from '../../dtos/meetings/meeting-detail.dto';
@@ -23,13 +24,13 @@ import { MeetingApiService } from '../../services/meeting-api.service';
 import { ToastService } from '../../services/toast.service';
 import { TranscriptViewerComponent } from '../../components/transcript-viewer/transcript-viewer.component';
 
-type DetailTab = 'overview' | 'transcript' | 'actions' | 'decisions' | 'email';
+type DetailTab = 'overview' | 'transcript' | 'actions' | 'decisions' | 'email' | 'analytics';
 type LoadState = 'loading' | 'ready' | 'unavailable';
 
 @Component({
   selector: 'app-meeting-detail',
   standalone: true,
-  imports: [DatePipe, FormsModule, TranscriptViewerComponent],
+  imports: [DatePipe, DecimalPipe, FormsModule, TranscriptViewerComponent],
   templateUrl: './meeting-detail.page.html',
   styleUrl: './meeting-detail.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -49,6 +50,7 @@ export class MeetingDetailPage implements OnInit {
     { id: 'actions', label: 'Action Items' },
     { id: 'decisions', label: 'Decisions' },
     { id: 'email', label: 'Follow-up Email' },
+    { id: 'analytics', label: 'Analytics' },
   ];
 
   readonly activeTab = signal<DetailTab>('overview');
@@ -72,8 +74,12 @@ export class MeetingDetailPage implements OnInit {
   readonly emailDraftSubject = signal('');
   readonly emailDraftBody = signal('');
 
+  readonly analytics = signal<MeetingAnalyticsDto | null>(null);
+  readonly analyticsState = signal<LoadState>('loading');
+
   readonly retryingTranscript = signal(false);
   readonly retryingAnalysis = signal(false);
+  readonly recomputing = signal(false);
   readonly savingEmail = signal(false);
 
   private meetingId = '';
@@ -90,7 +96,46 @@ export class MeetingDetailPage implements OnInit {
       this.loadTranscript(),
       this.loadRecording(),
       this.loadAnalysis(),
+      this.loadAnalytics(),
     ]);
+  }
+
+  private async loadAnalytics(): Promise<void> {
+    this.analyticsState.set('loading');
+    try {
+      this.analytics.set(await firstValueFrom(this.meetingApi.getMeetingAnalytics(this.meetingId)));
+      this.analyticsState.set('ready');
+    } catch {
+      // 404 until the speaker-mapping job has run for this meeting.
+      this.analyticsState.set('unavailable');
+    }
+  }
+
+  async recomputeAnalytics(): Promise<void> {
+    if (this.recomputing()) {
+      return;
+    }
+    this.recomputing.set(true);
+    try {
+      await firstValueFrom(this.meetingApi.recomputeAnalytics(this.meetingId));
+      this.toast.info('Analytics re-queued. Check back in a moment.');
+    } catch {
+      this.toast.error('Could not recompute analytics. A transcript is required first.');
+    } finally {
+      this.recomputing.set(false);
+    }
+  }
+
+  /** Bar width as a percentage of the longest bar, so the widest always fills the plot. */
+  barWidthPercent(seconds: number): number {
+    const max = Math.max(...(this.analytics()?.speakingDistribution ?? []).map((s) => s.seconds), 0);
+    return max > 0 ? Math.round((seconds / max) * 100) : 0;
+  }
+
+  formatDuration(totalSeconds: number): string {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
   }
 
   selectTab(tab: DetailTab): void {

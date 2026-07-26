@@ -1,0 +1,221 @@
+.analytics-shell {
+  padding: 32px 40px;
+  max-width: 1000px;
+  margin: 0 auto;
+  color: #e5e7eb;
+}
+
+.analytics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 32px;
+}
+
+.analytics-header .kicker {
+  color: #94a3b8;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+
+.analytics-header h1 {
+  margin: 0 0 4px;
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.analytics-header .hint {
+  margin: 0;
+  color: #94a3b8;
+}
+
+.secondary {
+  background: transparent;
+  color: #e5e7eb;
+  border: 1px solid #334155;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.secondary:hover {
+  background: #1e293b;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.empty-state {
+  padding: 40px 24px;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.empty-state h3 {
+  color: #e5e7eb;
+  margin: 0 0 8px;
+}
+
+/* ── Stat tiles ───────────────────────────────────────────────────── */
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+
+.stat-tile {
+  flex: 1 1 150px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+
+.stat-label {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 26px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.panel {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid #1e293b;
+}
+
+.panel h2 {
+  font-size: 18px;
+  margin: 0 0 20px;
+}
+
+/* ── Column chart ─────────────────────────────────────────────────────
+   Single-series colour, validated for >=3:1 against this surface (#0f172a).
+   The baseline is a recessive 1px hairline; labels never wear the data colour. */
+.viz {
+  --viz-series-1: #3987e5;
+  --viz-baseline: #334155;
+}
+
+.column-chart {
+  overflow-x: auto;
+}
+
+/* The plot holds only the bars, so the baseline sits exactly at their foot. */
+.plot-row,
+.tick-row {
+  display: flex;
+  align-items: flex-end;
+  /* Neighbouring columns are separated by surface, not by a stroke. */
+  gap: 8px;
+}
+
+.plot-row {
+  height: 200px;
+  border-bottom: 1px solid var(--viz-baseline);
+}
+
+.column-slot {
+  flex: 1 1 0;
+  /* Columns stay thin — leftover slot width is deliberate air. */
+  max-width: 24px;
+  min-width: 14px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.column-label {
+  font-size: 11px;
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 4px;
+}
+
+.column-fill {
+  width: 100%;
+  background: var(--viz-series-1);
+  /* 4px rounded cap at the data end, square where it meets the baseline. */
+  border-radius: 4px 4px 0 0;
+  min-height: 2px;
+}
+
+.tick-row {
+  margin-top: 8px;
+}
+
+/* Matches the column slots so each tick lines up with its bar. Labelled ticks are
+   allowed to spill into their unlabelled neighbours' space rather than wrap. */
+.column-tick {
+  flex: 1 1 0;
+  max-width: 24px;
+  min-width: 14px;
+  font-size: 10px;
+  color: #94a3b8;
+  text-align: center;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+/* ── Table view (the non-visual path to the same numbers) ─────────── */
+.table-view {
+  margin-top: 32px;
+}
+
+.table-view summary {
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.table-view table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.table-view th,
+.table-view td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1e293b;
+  font-size: 13px;
+}
+
+.table-view th {
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+.table-view td {
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: #cbd5e1;
+}

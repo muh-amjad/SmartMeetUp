@@ -75,6 +75,7 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IChatMessageRepository, ChatMessageRepository>();                 // ← naya
             builder.Services.AddScoped<ITranscriptRepository, TranscriptRepository>();
             builder.Services.AddScoped<IMeetingAnalysisRepository, MeetingAnalysisRepository>();
+            builder.Services.AddScoped<IMeetingAnalyticsRepository, MeetingAnalyticsRepository>();
 
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
@@ -82,6 +83,7 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IBlobStorageService, S3BlobStorageService>();
             builder.Services.AddScoped<ITranscriptionJob, TranscriptionJob>();
             builder.Services.AddScoped<IAiAnalysisJob, AiAnalysisJob>();
+            builder.Services.AddScoped<ISpeakerMappingJob, SpeakerMappingJob>();
 
             // The registry builds one provider per configured API key, so it needs a plain named
             // client rather than a typed one (base address and auth differ per provider).

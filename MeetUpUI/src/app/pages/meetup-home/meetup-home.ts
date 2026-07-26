@@ -275,6 +275,10 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     this.router.navigate(['/settings']);
   }
 
+  goToAnalytics(): void {
+    this.router.navigate(['/analytics']);
+  }
+
   openSupport(): void {
     window.alert('Support chat widget is ready. We can wire behavior in the next step.');
   }

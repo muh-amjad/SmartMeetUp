@@ -16,6 +16,8 @@ namespace MeetUp.Api.Data
         public DbSet<ActionItem> ActionItems => Set<ActionItem>();
         public DbSet<Decision> Decisions => Set<Decision>();
         public DbSet<FollowUpEmail> FollowUpEmails => Set<FollowUpEmail>();
+        public DbSet<ParticipantAudioActivity> ParticipantAudioActivities => Set<ParticipantAudioActivity>();
+        public DbSet<MeetingAnalytics> MeetingAnalytics => Set<MeetingAnalytics>();
 
         public AppDbContext(DbContextOptions<AppDbContext> options)
             : base(options)
@@ -171,7 +173,8 @@ namespace MeetUp.Api.Data
                     .IsUnique();
 
                 entity.Property(s => s.KeyTopics)
-                    .HasColumnType("jsonb");
+                    .HasColumnType("jsonb")
+                    .HasConversion(JsonbConverter.For<string>(), JsonbConverter.ComparerFor<string>());
 
                 entity.Property(s => s.ProviderKey)
                     .HasMaxLength(60)
@@ -257,6 +260,43 @@ namespace MeetUp.Api.Data
                     .WithMany()
                     .HasForeignKey(e => e.EditedByUserId)
                     .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<ParticipantAudioActivity>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+
+                entity.Property(a => a.UserId).IsRequired();
+
+                // Speaker mapping scans every interval for a meeting, ordered by time
+                entity.HasIndex(a => new { a.MeetingId, a.StartedSpeakingMs });
+
+                entity.HasOne(a => a.Meeting)
+                    .WithMany()
+                    .HasForeignKey(a => a.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(a => a.User)
+                    .WithMany()
+                    .HasForeignKey(a => a.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            builder.Entity<MeetingAnalytics>(entity =>
+            {
+                // MeetingId doubles as the primary key — analytics is a 1:1 extension of a meeting
+                entity.HasKey(a => a.MeetingId);
+
+                entity.Property(a => a.SpeakingDistribution)
+                    .HasColumnType("jsonb")
+                    .HasConversion(
+                        JsonbConverter.For<SpeakingShare>(),
+                        JsonbConverter.ComparerFor<SpeakingShare>());
+
+                entity.HasOne(a => a.Meeting)
+                    .WithOne()
+                    .HasForeignKey<MeetingAnalytics>(a => a.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

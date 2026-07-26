@@ -1,0 +1,112 @@
+<div class="analytics-shell">
+  <header class="analytics-header">
+    <div>
+      <p class="kicker">MeetUp Workbench</p>
+      <h1>Analytics</h1>
+      <p class="hint">Your meetings over the last 90 days.</p>
+    </div>
+    <button type="button" class="secondary" (click)="back()">← Dashboard</button>
+  </header>
+
+  @if (loading()) {
+    <p class="muted">Loading analytics...</p>
+  } @else if (analytics(); as a) {
+
+    @if (a.meetingCount === 0) {
+      <div class="empty-state">
+        <h3>Nothing to report yet</h3>
+        <p>Hold a meeting and it will show up here once it has been transcribed.</p>
+      </div>
+    } @else {
+      <section class="stat-row">
+        <div class="stat-tile">
+          <span class="stat-label">Total meeting time</span>
+          <span class="stat-value">{{ a.totalMeetingHours | number }}h</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Meetings held</span>
+          <span class="stat-value">{{ a.meetingCount }}</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Average duration</span>
+          <span class="stat-value">{{ a.averageDurationMinutes }}m</span>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Your speaking time</span>
+          <span class="stat-value">{{ formatSpeakingTime(a.totalSpeakingSeconds) }}</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Meetings per week</h2>
+
+        @if (!a.weeklyBreakdown.length) {
+          <p class="muted">No weekly activity in this window.</p>
+        } @else {
+          <!-- Single series: the axis carries the weeks, so no legend. Only the busiest
+               column is directly labelled; the rest are in the hover and the table below. -->
+          <div class="viz column-chart">
+            <div class="plot-row">
+              @for (week of a.weeklyBreakdown; track week.weekStartUtc) {
+                <div
+                  class="column-slot"
+                  [title]="(week.weekStartUtc | date:'mediumDate') + ': ' + week.meetingCount + ' meeting(s), ' + week.totalMinutes + ' min'">
+                  @if (isBusiest(week)) {
+                    <span class="column-label">{{ week.meetingCount }}</span>
+                  }
+                  <span class="column-fill" [style.height.%]="columnHeightPercent(week)"></span>
+                </div>
+              }
+            </div>
+            <!-- Ticks live outside the plot so they never overlay the bars, and only every
+                 third week is labelled — 12 labels at this column width would collide. -->
+            <div class="tick-row">
+              @for (week of a.weeklyBreakdown; track week.weekStartUtc; let i = $index) {
+                <span class="column-tick">
+                  @if (showTick(i)) { {{ week.weekStartUtc | date:'d MMM' }} }
+                </span>
+              }
+            </div>
+          </div>
+
+          <details class="table-view">
+            <summary>Show data as a table</summary>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Week starting</th>
+                  <th scope="col">Meetings</th>
+                  <th scope="col">Minutes</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (week of a.weeklyBreakdown; track week.weekStartUtc) {
+                  <tr>
+                    <td>{{ week.weekStartUtc | date:'mediumDate' }}</td>
+                    <td>{{ week.meetingCount }}</td>
+                    <td>{{ week.totalMinutes | number }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </details>
+        }
+      </section>
+
+      <section class="panel">
+        <h2>Most discussed topics</h2>
+        @if (!a.mostDiscussedTopics.length) {
+          <p class="muted">
+            Topics come from AI summaries. Once your meetings have been analysed they will appear here.
+          </p>
+        } @else {
+          <div class="chips">
+            @for (topic of a.mostDiscussedTopics; track topic) {
+              <span class="chip">{{ topic }}</span>
+            }
+          </div>
+        }
+      </section>
+    }
+  }
+</div>

@@ -61,3 +61,35 @@ export interface AnalysisProviderDto {
 export interface UserPreferencesDto {
   preferredAnalysisProviderKey: string | null;
 }
+
+export interface SpeakingShareDto {
+  userId: string;
+  displayName: string;
+  seconds: number;
+  percent: number;
+}
+
+export interface MeetingAnalyticsDto {
+  totalDurationSeconds: number;
+  participantCount: number;
+  wordCount: number;
+  averageWordsPerMinute: number;
+  totalSpeakingSeconds: number;
+  speakingDistribution: SpeakingShareDto[];
+  computedUtc: string;
+}
+
+export interface WeeklyBucketDto {
+  weekStartUtc: string;
+  meetingCount: number;
+  totalMinutes: number;
+}
+
+export interface AccountAnalyticsDto {
+  totalMeetingHours: number;
+  meetingCount: number;
+  averageDurationMinutes: number;
+  totalSpeakingSeconds: number;
+  mostDiscussedTopics: string[];
+  weeklyBreakdown: WeeklyBucketDto[];
+}

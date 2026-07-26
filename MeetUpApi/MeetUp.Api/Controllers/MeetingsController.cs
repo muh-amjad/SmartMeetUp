@@ -25,6 +25,7 @@ public class MeetingsController : ControllerBase
     private readonly IChatMessageRepository _chatMessageRepository;
     private readonly ITranscriptRepository _transcriptRepository;
     private readonly IMeetingAnalysisRepository _analysisRepository;
+    private readonly IMeetingAnalyticsRepository _analyticsRepository;
     private readonly ILiveKitService _liveKitService;
     private readonly IBlobStorageService _blobStorageService;
     private readonly AnalysisProviderRegistry _providerRegistry;
@@ -38,6 +39,7 @@ public class MeetingsController : ControllerBase
     IChatMessageRepository chatMessageRepository,
     ITranscriptRepository transcriptRepository,
     IMeetingAnalysisRepository analysisRepository,
+    IMeetingAnalyticsRepository analyticsRepository,
     ILiveKitService liveKitService,
     IBlobStorageService blobStorageService,
     AnalysisProviderRegistry providerRegistry,
@@ -51,6 +53,7 @@ public class MeetingsController : ControllerBase
         _chatMessageRepository = chatMessageRepository;
         _transcriptRepository = transcriptRepository;
         _analysisRepository = analysisRepository;
+        _analyticsRepository = analyticsRepository;
         _liveKitService = liveKitService;
         _blobStorageService = blobStorageService;
         _providerRegistry = providerRegistry;
@@ -561,6 +564,59 @@ public class MeetingsController : ControllerBase
         BackgroundJob.Enqueue<IAiAnalysisJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
 
         _logger.LogInformation("User {UserId} re-enqueued AI analysis for meeting {MeetingId}", userId, meeting.Id);
+        return Accepted();
+    }
+
+    /// <summary>Speaking distribution and word counts for a meeting.</summary>
+    [HttpGet("{id:guid}/analytics")]
+    public async Task<ActionResult<MeetingAnalyticsDto>> GetAnalytics(Guid id, CancellationToken ct)
+    {
+        await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        var analytics = await _analyticsRepository.GetAnalyticsAsync(id, ct)
+            ?? throw new NotFoundException("Analytics have not been computed for this meeting yet.");
+
+        return Ok(new MeetingAnalyticsDto
+        {
+            TotalDurationSeconds = analytics.TotalDurationSeconds,
+            ParticipantCount = analytics.ParticipantCount,
+            WordCount = analytics.WordCount,
+            AverageWordsPerMinute = analytics.AverageWordsPerMinute,
+            TotalSpeakingSeconds = analytics.SpeakingDistribution.Sum(s => s.Seconds),
+            SpeakingDistribution = analytics.SpeakingDistribution
+                .Select(s => new SpeakingShareDto
+                {
+                    UserId = s.UserId,
+                    DisplayName = s.DisplayName,
+                    Seconds = s.Seconds,
+                    Percent = s.Percent,
+                })
+                .ToList(),
+            ComputedUtc = analytics.ComputedUtc,
+        });
+    }
+
+    /// <summary>Host-only: recompute speaker attribution and analytics for an existing transcript.</summary>
+    [HttpPost("{id:guid}/analytics/recompute")]
+    public async Task<IActionResult> RecomputeAnalytics(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can recompute analytics.");
+        }
+
+        _ = await _transcriptRepository.GetByMeetingIdAsync(id, ct)
+            ?? throw new ConflictException("Analytics need a transcript, and this meeting has not been transcribed.");
+
+        BackgroundJob.Enqueue<ISpeakerMappingJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+
+        _logger.LogInformation("User {UserId} re-enqueued analytics for meeting {MeetingId}", userId, meeting.Id);
         return Accepted();
     }
 

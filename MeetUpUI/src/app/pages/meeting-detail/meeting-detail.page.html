@@ -193,6 +193,78 @@
             }
           }
         }
+
+        @case ('analytics') {
+          <div class="panel-head">
+            <h2>Analytics</h2>
+            @if (m.isHost) {
+              <button type="button" (click)="recomputeAnalytics()" [disabled]="recomputing()">
+                {{ recomputing() ? 'Queueing...' : 'Recompute' }}
+              </button>
+            }
+          </div>
+
+          @switch (analyticsState()) {
+            @case ('loading') { <p class="muted">Loading analytics...</p> }
+            @case ('unavailable') {
+              <p class="muted">
+                Analytics are computed alongside the transcript. Once this meeting has been
+                transcribed they will appear here.
+              </p>
+            }
+            @case ('ready') {
+              @if (analytics(); as a) {
+                <div class="stat-row">
+                  <div class="stat-tile">
+                    <span class="stat-label">Duration</span>
+                    <span class="stat-value">{{ formatDuration(a.totalDurationSeconds) }}</span>
+                  </div>
+                  <div class="stat-tile">
+                    <span class="stat-label">Participants</span>
+                    <span class="stat-value">{{ a.participantCount }}</span>
+                  </div>
+                  <div class="stat-tile">
+                    <span class="stat-label">Words spoken</span>
+                    <span class="stat-value">{{ a.wordCount | number }}</span>
+                  </div>
+                  <div class="stat-tile">
+                    <span class="stat-label">Words per minute</span>
+                    <span class="stat-value">{{ a.averageWordsPerMinute | number }}</span>
+                  </div>
+                </div>
+
+                <h3 class="chart-title">Speaking time by participant</h3>
+
+                @if (a.totalSpeakingSeconds === 0) {
+                  <p class="muted">
+                    No speaking time could be attributed. This happens when the meeting was recorded
+                    before speaker tracking was available, or nobody's microphone was active.
+                  </p>
+                } @else {
+                  <!-- One series: identity is carried by the row label, so no legend is needed. -->
+                  <ul class="viz bar-chart">
+                    @for (share of a.speakingDistribution; track share.userId) {
+                      <li class="bar-row">
+                        <span class="bar-label">{{ share.displayName }}</span>
+                        <span class="bar-track">
+                          <span
+                            class="bar-fill"
+                            [style.width.%]="barWidthPercent(share.seconds)"
+                            [title]="share.displayName + ': ' + formatDuration(share.seconds) + ' (' + share.percent + '%)'">
+                          </span>
+                        </span>
+                        <span class="bar-value">
+                          {{ formatDuration(share.seconds) }}
+                          <span class="bar-percent">{{ share.percent }}%</span>
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+              }
+            }
+          }
+        }
       }
     </section>
   }

@@ -2,7 +2,11 @@ import { HttpClient } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
-import { AnalysisProviderDto, UserPreferencesDto } from '../dtos/meetings/analysis.dto';
+import {
+  AccountAnalyticsDto,
+  AnalysisProviderDto,
+  UserPreferencesDto,
+} from '../dtos/meetings/analysis.dto';
 
 @Injectable({ providedIn: 'root' })
 export class AiProviderService {
@@ -20,5 +24,10 @@ export class AiProviderService {
 
   savePreferences(payload: UserPreferencesDto): Observable<void> {
     return this.http.patch<void>(`${this.baseUrl}/api/me/preferences`, payload);
+  }
+
+  /** Account-wide meeting analytics (server defaults to the last 90 days). */
+  getAccountAnalytics(): Observable<AccountAnalyticsDto> {
+    return this.http.get<AccountAnalyticsDto>(`${this.baseUrl}/api/me/analytics`);
   }
 }

@@ -2,6 +2,7 @@ import { inject, Injectable, signal } from '@angular/core';
 import {
   ConnectionState,
   LocalParticipant,
+  Participant,
   RemoteParticipant,
   Room,
   RoomEvent,
@@ -9,6 +10,7 @@ import {
 } from 'livekit-client';
 import { firstValueFrom } from 'rxjs';
 import { MeetingApiService } from './meeting-api.service';
+import { SignalrService, SpeakingInterval } from './signalr.service';
 
 /**
  * Wraps a LiveKit Room object and exposes reactive signals for the UI.
@@ -17,8 +19,16 @@ import { MeetingApiService } from './meeting-api.service';
 @Injectable({ providedIn: 'root' })
 export class LivekitMeetingService {
   private readonly meetingApi = inject(MeetingApiService);
+  private readonly signalR = inject(SignalrService);
 
   private room: Room | null = null;
+
+  /** How often finished speaking turns are pushed to the server during a call. */
+  private static readonly SpeakingFlushIntervalMs = 15_000;
+
+  private speakingSince: Date | null = null;
+  private pendingSpeakingIntervals: SpeakingInterval[] = [];
+  private speakingFlushTimer: ReturnType<typeof setInterval> | null = null;
 
   // ── Public reactive state ────────────────────────────────
   readonly connectionState = signal<ConnectionState>(ConnectionState.Disconnected);
@@ -93,6 +103,7 @@ export class LivekitMeetingService {
     this.isHost.set(response.isHost);
     this.localParticipant.set(room.localParticipant);
     this.refreshRemoteParticipants();
+    this.startSpeakingFlushTimer();
   }
 
   /** Disconnect from the LiveKit room and clear signals. */
@@ -102,6 +113,11 @@ export class LivekitMeetingService {
     }
     const room = this.room;
     this.room = null;
+
+    // Close any turn still open, then push everything before the meeting id is cleared.
+    this.stopSpeakingFlushTimer();
+    this.trackLocalSpeaking(room, []);
+    await this.flushSpeakingIntervals();
 
     // Explicitly disable camera + mic first. This unpublishes the tracks
     // and (with stopLocalTrackOnUnpublish=true) stops them, releasing the
@@ -224,7 +240,70 @@ export class LivekitMeetingService {
       .on(RoomEvent.TrackUnmuted, () => this.refreshRemoteParticipants())
       .on(RoomEvent.RecordingStatusChanged, (recording) => this.isRecording.set(recording))
       .on(RoomEvent.LocalTrackPublished, () => this.localParticipant.set(room.localParticipant))
-      .on(RoomEvent.LocalTrackUnpublished, () => this.localParticipant.set(room.localParticipant));
+      .on(RoomEvent.LocalTrackUnpublished, () => this.localParticipant.set(room.localParticipant))
+      .on(RoomEvent.ActiveSpeakersChanged, (speakers) => this.trackLocalSpeaking(room, speakers));
+  }
+
+  /**
+   * Turns the active-speaker signal into completed speaking turns for this client only. Each client
+   * reports its own turns; the server attributes them to the authenticated caller, so nobody can
+   * claim speaking time on someone else's behalf.
+   */
+  private trackLocalSpeaking(room: Room, speakers: Participant[]): void {
+    const localIdentity = room.localParticipant.identity;
+    const speakingNow = speakers.some((s) => s.identity === localIdentity);
+
+    if (speakingNow && this.speakingSince === null) {
+      this.speakingSince = new Date();
+      return;
+    }
+
+    if (!speakingNow && this.speakingSince !== null) {
+      const startedUtc = this.speakingSince;
+      this.speakingSince = null;
+
+      const stoppedUtc = new Date();
+      // Sub-100ms blips are noise rather than speech, and would only add rows to overlap against.
+      if (stoppedUtc.getTime() - startedUtc.getTime() >= 100) {
+        this.pendingSpeakingIntervals.push({
+          startedUtc: startedUtc.toISOString(),
+          stoppedUtc: stoppedUtc.toISOString(),
+        });
+      }
+    }
+  }
+
+  private startSpeakingFlushTimer(): void {
+    this.stopSpeakingFlushTimer();
+    this.speakingFlushTimer = setInterval(
+      () => void this.flushSpeakingIntervals(),
+      LivekitMeetingService.SpeakingFlushIntervalMs,
+    );
+  }
+
+  private stopSpeakingFlushTimer(): void {
+    if (this.speakingFlushTimer !== null) {
+      clearInterval(this.speakingFlushTimer);
+      this.speakingFlushTimer = null;
+    }
+  }
+
+  /** Sends whatever speaking turns have accumulated. Failures are dropped: analytics are not worth
+   *  interrupting a call for, and the next flush carries on regardless. */
+  private async flushSpeakingIntervals(): Promise<void> {
+    const meetingId = this.currentMeetingId();
+    if (!meetingId || this.pendingSpeakingIntervals.length === 0) {
+      return;
+    }
+
+    const batch = this.pendingSpeakingIntervals;
+    this.pendingSpeakingIntervals = [];
+
+    try {
+      await this.signalR.reportSpeakingIntervals(meetingId, batch);
+    } catch (err) {
+      console.warn('Could not report speaking intervals', err);
+    }
   }
 
   private refreshRemoteParticipants(): void {
@@ -236,6 +315,9 @@ export class LivekitMeetingService {
   }
 
   private clearState(): void {
+    this.stopSpeakingFlushTimer();
+    this.speakingSince = null;
+    this.pendingSpeakingIntervals = [];
     this.remoteParticipants.set([]);
     this.localParticipant.set(null);
     this.isRecording.set(false);

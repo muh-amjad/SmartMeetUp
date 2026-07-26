@@ -291,6 +291,104 @@ audio {
   color: #cbd5e1;
 }
 
+/* ── Charts ──────────────────────────────────────────────────────────
+   Single-series colour, validated for >=3:1 against this surface (#0f172a).
+   Identity is carried by each row's label, so there is no legend and the
+   text never wears the data colour. */
+.viz {
+  --viz-series-1: #3987e5;
+  --viz-track: #1e293b;
+  --viz-baseline: #334155;
+}
+
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.stat-tile {
+  flex: 1 1 120px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.stat-label {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 22px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.chart-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #cbd5e1;
+  margin: 0 0 16px;
+}
+
+.bar-chart {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.bar-label {
+  font-size: 13px;
+  color: #cbd5e1;
+  overflow-wrap: anywhere;
+}
+
+.bar-track {
+  display: block;
+  background: var(--viz-track);
+  border-radius: 2px;
+  /* Bars stay thin — the row's leftover height is deliberate air. */
+  height: 18px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--viz-series-1);
+  /* Square at the baseline, 4px rounded at the data end. */
+  border-radius: 0 4px 4px 0;
+  min-width: 2px;
+}
+
+.bar-value {
+  font-size: 13px;
+  color: #cbd5e1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bar-percent {
+  color: #94a3b8;
+  margin-left: 6px;
+}
+
 .email-body {
   background: #0f172a;
   border: 1px solid #1e293b;

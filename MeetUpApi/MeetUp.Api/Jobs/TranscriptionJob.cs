@@ -110,6 +110,11 @@ public sealed class TranscriptionJob : ITranscriptionJob
             _logger.LogInformation("Meeting {MeetingId} transcribed: {UtteranceCount} utterances",
                 meeting.Id, transcript.Utterances.Count);
 
+            // Speaker attribution and analytics only need the transcript, so they run regardless of
+            // whether AI analysis is configured, and independently of it — neither job touches the
+            // other's data or the meeting status.
+            BackgroundJob.Enqueue<ISpeakerMappingJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+
             if (analysisAvailable)
             {
                 BackgroundJob.Enqueue<IAiAnalysisJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
