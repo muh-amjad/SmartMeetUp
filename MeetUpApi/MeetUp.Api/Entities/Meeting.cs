@@ -23,6 +23,13 @@ public class Meeting
     public string? RecordingBlobKey { get; set; }
     public int? RecordingDurationSeconds { get; set; }
 
+    // AI analysis: the provider is frozen at meeting-creation time so that changing your
+    // preference later doesn't retroactively affect meetings already in flight.
+    public string? AnalysisProviderRequested { get; set; }
+
+    /// <summary>Provider that actually ran — differs from Requested when a fallback kicked in.</summary>
+    public string? AnalysisProviderUsed { get; set; }
+
      public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedUtc { get; set; } = DateTime.UtcNow;
 

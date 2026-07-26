@@ -8,17 +8,28 @@ import {
   signal,
   ViewChild,
 } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
+import { firstValueFrom } from 'rxjs';
+import {
+  ActionItemDto,
+  DecisionDto,
+  FollowUpEmailDto,
+  MeetingSummaryDto,
+} from '../../dtos/meetings/analysis.dto';
 import { MeetingDetailDto } from '../../dtos/meetings/meeting-detail.dto';
 import { TranscriptUtteranceDto } from '../../dtos/meetings/transcript.dto';
 import { MeetingApiService } from '../../services/meeting-api.service';
 import { ToastService } from '../../services/toast.service';
 import { TranscriptViewerComponent } from '../../components/transcript-viewer/transcript-viewer.component';
 
+type DetailTab = 'overview' | 'transcript' | 'actions' | 'decisions' | 'email';
+type LoadState = 'loading' | 'ready' | 'unavailable';
+
 @Component({
   selector: 'app-meeting-detail',
   standalone: true,
-  imports: [DatePipe, TranscriptViewerComponent],
+  imports: [DatePipe, FormsModule, TranscriptViewerComponent],
   templateUrl: './meeting-detail.page.html',
   styleUrl: './meeting-detail.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -32,12 +43,38 @@ export class MeetingDetailPage implements OnInit {
   @ViewChild('audioPlayer')
   audioPlayerRef?: ElementRef<HTMLAudioElement>;
 
+  readonly tabs: ReadonlyArray<{ id: DetailTab; label: string }> = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'transcript', label: 'Transcript' },
+    { id: 'actions', label: 'Action Items' },
+    { id: 'decisions', label: 'Decisions' },
+    { id: 'email', label: 'Follow-up Email' },
+  ];
+
+  readonly activeTab = signal<DetailTab>('overview');
+
   readonly meeting = signal<MeetingDetailDto | null>(null);
-  readonly utterances = signal<TranscriptUtteranceDto[]>([]);
   readonly recordingUrl = signal<string | null>(null);
   readonly loading = signal(true);
-  readonly transcriptState = signal<'loading' | 'ready' | 'unavailable'>('loading');
-  readonly retrying = signal(false);
+
+  readonly utterances = signal<TranscriptUtteranceDto[]>([]);
+  readonly transcriptState = signal<LoadState>('loading');
+
+  readonly summary = signal<MeetingSummaryDto | null>(null);
+  readonly summaryState = signal<LoadState>('loading');
+
+  readonly actionItems = signal<ActionItemDto[]>([]);
+  readonly decisions = signal<DecisionDto[]>([]);
+
+  readonly email = signal<FollowUpEmailDto | null>(null);
+  readonly emailState = signal<LoadState>('loading');
+  readonly emailEditing = signal(false);
+  readonly emailDraftSubject = signal('');
+  readonly emailDraftBody = signal('');
+
+  readonly retryingTranscript = signal(false);
+  readonly retryingAnalysis = signal(false);
+  readonly savingEmail = signal(false);
 
   private meetingId = '';
 
@@ -49,69 +86,174 @@ export class MeetingDetailPage implements OnInit {
     }
 
     await this.loadMeeting();
-    await Promise.all([this.loadTranscript(), this.loadRecording()]);
+    await Promise.all([
+      this.loadTranscript(),
+      this.loadRecording(),
+      this.loadAnalysis(),
+    ]);
+  }
+
+  selectTab(tab: DetailTab): void {
+    this.activeTab.set(tab);
   }
 
   private async loadMeeting(): Promise<void> {
     this.loading.set(true);
-    this.meetingApi.getById(this.meetingId).subscribe({
-      next: (m) => {
-        this.meeting.set(m);
-        this.loading.set(false);
-      },
-      error: () => {
-        this.toast.error('Could not load meeting.');
-        this.loading.set(false);
-        this.router.navigate(['/meetings']);
-      },
-    });
+    try {
+      this.meeting.set(await firstValueFrom(this.meetingApi.getById(this.meetingId)));
+    } catch {
+      this.toast.error('Could not load meeting.');
+      this.router.navigate(['/meetings']);
+    } finally {
+      this.loading.set(false);
+    }
   }
 
-  private loadTranscript(): Promise<void> {
-    return new Promise((resolve) => {
-      this.transcriptState.set('loading');
-      this.meetingApi.getTranscript(this.meetingId).subscribe({
-        next: (t) => {
-          this.utterances.set(t.utterances);
-          this.transcriptState.set('ready');
-          resolve();
-        },
-        // 404 = not transcribed yet (or failed); treat as "unavailable" rather than an error toast.
-        error: () => {
-          this.transcriptState.set('unavailable');
-          resolve();
-        },
-      });
-    });
+  private async loadTranscript(): Promise<void> {
+    this.transcriptState.set('loading');
+    try {
+      const transcript = await firstValueFrom(this.meetingApi.getTranscript(this.meetingId));
+      this.utterances.set(transcript.utterances);
+      this.transcriptState.set('ready');
+    } catch {
+      // 404 just means "not transcribed yet" — not an error worth a toast.
+      this.transcriptState.set('unavailable');
+    }
   }
 
-  private loadRecording(): Promise<void> {
-    return new Promise((resolve) => {
-      this.meetingApi.getRecordingUrl(this.meetingId).subscribe({
-        next: (r) => {
-          this.recordingUrl.set(r.url);
-          resolve();
-        },
-        error: () => resolve(),
-      });
-    });
+  private async loadRecording(): Promise<void> {
+    try {
+      const recording = await firstValueFrom(this.meetingApi.getRecordingUrl(this.meetingId));
+      this.recordingUrl.set(recording.url);
+    } catch {
+      this.recordingUrl.set(null);
+    }
+  }
+
+  /** Summary/email 404 until analysis has run; the list endpoints just come back empty. */
+  private async loadAnalysis(): Promise<void> {
+    this.summaryState.set('loading');
+    this.emailState.set('loading');
+
+    const summary = firstValueFrom(this.meetingApi.getSummary(this.meetingId))
+      .then((s) => {
+        this.summary.set(s);
+        this.summaryState.set('ready');
+      })
+      .catch(() => this.summaryState.set('unavailable'));
+
+    const email = firstValueFrom(this.meetingApi.getFollowUpEmail(this.meetingId))
+      .then((e) => {
+        this.email.set(e);
+        this.emailDraftSubject.set(e.subject);
+        this.emailDraftBody.set(e.bodyMarkdown);
+        this.emailState.set('ready');
+      })
+      .catch(() => this.emailState.set('unavailable'));
+
+    const items = firstValueFrom(this.meetingApi.getActionItems(this.meetingId))
+      .then((list) => this.actionItems.set(list))
+      .catch(() => this.actionItems.set([]));
+
+    const decisions = firstValueFrom(this.meetingApi.getDecisions(this.meetingId))
+      .then((list) => this.decisions.set(list))
+      .catch(() => this.decisions.set([]));
+
+    await Promise.all([summary, email, items, decisions]);
+  }
+
+  async toggleActionItem(item: ActionItemDto): Promise<void> {
+    const nextStatus = item.status === 'Done' ? 'Open' : 'Done';
+    try {
+      const updated = await firstValueFrom(
+        this.meetingApi.updateActionItem(item.id, { status: nextStatus }),
+      );
+      this.actionItems.update((items) => items.map((i) => (i.id === updated.id ? updated : i)));
+    } catch {
+      this.toast.error('Could not update the action item.');
+    }
+  }
+
+  isOverdue(item: ActionItemDto): boolean {
+    return (
+      item.status !== 'Done' &&
+      item.dueDateUtc !== null &&
+      new Date(item.dueDateUtc).getTime() < Date.now()
+    );
+  }
+
+  assigneeLabel(item: ActionItemDto): string {
+    return item.assigneeUsername ?? item.assigneeNameRaw ?? 'Unassigned';
   }
 
   async retryTranscript(): Promise<void> {
-    if (this.retrying()) {
+    if (this.retryingTranscript()) {
       return;
     }
-    this.retrying.set(true);
-    this.meetingApi.retryTranscript(this.meetingId).subscribe({
-      next: () => {
-        this.toast.info('Transcription re-queued. Check back in a few minutes.');
-        this.retrying.set(false);
-      },
-      error: () => {
-        this.toast.error('Could not retry transcription.');
-        this.retrying.set(false);
-      },
-    });
+    this.retryingTranscript.set(true);
+    try {
+      await firstValueFrom(this.meetingApi.retryTranscript(this.meetingId));
+      this.toast.info('Transcription re-queued. Check back in a few minutes.');
+    } catch {
+      this.toast.error('Could not retry transcription.');
+    } finally {
+      this.retryingTranscript.set(false);
+    }
+  }
+
+  async retryAnalysis(): Promise<void> {
+    if (this.retryingAnalysis()) {
+      return;
+    }
+    this.retryingAnalysis.set(true);
+    try {
+      await firstValueFrom(this.meetingApi.retryAnalysis(this.meetingId));
+      this.toast.info('AI analysis re-queued. Check back in a minute.');
+    } catch {
+      this.toast.error('Could not retry analysis. A transcript is required first.');
+    } finally {
+      this.retryingAnalysis.set(false);
+    }
+  }
+
+  startEditingEmail(): void {
+    const current = this.email();
+    if (current) {
+      this.emailDraftSubject.set(current.subject);
+      this.emailDraftBody.set(current.bodyMarkdown);
+    }
+    this.emailEditing.set(true);
+  }
+
+  cancelEditingEmail(): void {
+    const current = this.email();
+    if (current) {
+      this.emailDraftSubject.set(current.subject);
+      this.emailDraftBody.set(current.bodyMarkdown);
+    }
+    this.emailEditing.set(false);
+  }
+
+  async saveEmail(): Promise<void> {
+    if (this.savingEmail()) {
+      return;
+    }
+    this.savingEmail.set(true);
+    const subject = this.emailDraftSubject();
+    const bodyMarkdown = this.emailDraftBody();
+
+    try {
+      await firstValueFrom(
+        this.meetingApi.updateFollowUpEmail(this.meetingId, { subject, bodyMarkdown }),
+      );
+      this.email.update((e) => (e ? { ...e, subject, bodyMarkdown } : e));
+      this.emailEditing.set(false);
+      this.toast.success('Follow-up email saved.');
+    } catch {
+      this.toast.error('Could not save the follow-up email.');
+    } finally {
+      this.savingEmail.set(false);
+    }
   }
 
   seekAudio(seconds: number): void {

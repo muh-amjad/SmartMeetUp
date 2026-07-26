@@ -7,7 +7,9 @@ using MeetUp.Api.Jobs;
 using MeetUp.Api.Options;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
+using MeetUp.Api.Services.Ai;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
@@ -22,8 +24,11 @@ public class MeetingsController : ControllerBase
     private readonly IMeetingParticipantRepository _participantRepository;
     private readonly IChatMessageRepository _chatMessageRepository;
     private readonly ITranscriptRepository _transcriptRepository;
+    private readonly IMeetingAnalysisRepository _analysisRepository;
     private readonly ILiveKitService _liveKitService;
     private readonly IBlobStorageService _blobStorageService;
+    private readonly AnalysisProviderRegistry _providerRegistry;
+    private readonly UserManager<ApplicationUser> _userManager;
     private readonly LiveKitOptions _liveKitOptions;
     private readonly ILogger<MeetingsController> _logger;
 
@@ -32,17 +37,23 @@ public class MeetingsController : ControllerBase
     IMeetingParticipantRepository participantRepository,
     IChatMessageRepository chatMessageRepository,
     ITranscriptRepository transcriptRepository,
+    IMeetingAnalysisRepository analysisRepository,
     ILiveKitService liveKitService,
     IBlobStorageService blobStorageService,
+    AnalysisProviderRegistry providerRegistry,
+    UserManager<ApplicationUser> userManager,
     IOptions<LiveKitOptions> liveKitOptions,
     ILogger<MeetingsController> logger)
     {
+        _userManager = userManager;
         _meetingRepository = meetingRepository;
         _participantRepository = participantRepository;
         _chatMessageRepository = chatMessageRepository;
         _transcriptRepository = transcriptRepository;
+        _analysisRepository = analysisRepository;
         _liveKitService = liveKitService;
         _blobStorageService = blobStorageService;
+        _providerRegistry = providerRegistry;
         _liveKitOptions = liveKitOptions.Value;
         _logger = logger;
     }
@@ -57,6 +68,10 @@ public class MeetingsController : ControllerBase
             ?? throw new ForbiddenException("User id claim missing.");
         var hostUsername = User.Identity?.Name ?? "Host";
 
+        // Freeze the host's provider choice now: changing the preference later must not retroactively
+        // change how meetings that are already under way get analysed.
+        var host = await _userManager.FindByIdAsync(hostUserId);
+
         var meeting = new Meeting
         {
             Id = Guid.NewGuid(),
@@ -64,6 +79,7 @@ public class MeetingsController : ControllerBase
             Title = string.IsNullOrWhiteSpace(request?.Title) ? "Untitled Meeting" : request!.Title.Trim(),
             LiveKitRoomName = $"meeting-{Guid.NewGuid():N}",  // unique room name in LiveKit
             Status = MeetingStatus.Scheduled,
+            AnalysisProviderRequested = host?.PreferredAnalysisProviderKey,
             CreatedUtc = DateTime.UtcNow,
             UpdatedUtc = DateTime.UtcNow,
         };
@@ -422,6 +438,145 @@ public class MeetingsController : ControllerBase
         _logger.LogInformation("User {UserId} re-enqueued transcription for meeting {MeetingId}", userId, meeting.Id);
         return Accepted();
     }
+
+    /// <summary>AI-generated overview and key topics.</summary>
+    [HttpGet("{id:guid}/summary")]
+    public async Task<ActionResult<MeetingSummaryDto>> GetSummary(Guid id, CancellationToken ct)
+    {
+        await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        var summary = await _analysisRepository.GetSummaryAsync(id, ct)
+            ?? throw new NotFoundException("This meeting has not been analysed yet.");
+
+        return Ok(new MeetingSummaryDto
+        {
+            OverviewText = summary.OverviewText,
+            KeyTopics = summary.KeyTopics,
+            ProviderKey = summary.ProviderKey,
+            ProviderDisplayName = _providerRegistry.Find(summary.ProviderKey)?.DisplayName ?? summary.ProviderKey,
+            ModelUsed = summary.ModelUsed,
+            GeneratedUtc = summary.GeneratedUtc,
+        });
+    }
+
+    /// <summary>AI-extracted action items for a meeting.</summary>
+    [HttpGet("{id:guid}/action-items")]
+    public async Task<ActionResult<IReadOnlyList<ActionItemDto>>> GetActionItems(Guid id, CancellationToken ct)
+    {
+        await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        var items = await _analysisRepository.GetActionItemsAsync(id, ct);
+        return Ok(items.Select(ToDto).ToList());
+    }
+
+    /// <summary>AI-extracted decisions for a meeting.</summary>
+    [HttpGet("{id:guid}/decisions")]
+    public async Task<ActionResult<IReadOnlyList<DecisionDto>>> GetDecisions(Guid id, CancellationToken ct)
+    {
+        await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        var decisions = await _analysisRepository.GetDecisionsAsync(id, ct);
+        return Ok(decisions.Select(d => new DecisionDto
+        {
+            Id = d.Id,
+            Description = d.Description,
+            SourceStartMs = d.SourceUtterance?.StartMs,
+            CreatedUtc = d.CreatedUtc,
+        }).ToList());
+    }
+
+    /// <summary>The AI-drafted follow-up email (sending itself lands in Phase 9).</summary>
+    [HttpGet("{id:guid}/follow-up-email")]
+    public async Task<ActionResult<FollowUpEmailDto>> GetFollowUpEmail(Guid id, CancellationToken ct)
+    {
+        await EnsureCallerCanAccessMeetingAsync(id, ct);
+
+        var email = await _analysisRepository.GetFollowUpEmailAsync(id, ct)
+            ?? throw new NotFoundException("No follow-up email has been drafted for this meeting.");
+
+        return Ok(new FollowUpEmailDto
+        {
+            Subject = email.Subject,
+            BodyMarkdown = email.BodyMarkdown,
+            Status = email.Status.ToString(),
+            SentUtc = email.SentUtc,
+            CreatedUtc = email.CreatedUtc,
+        });
+    }
+
+    /// <summary>Host-only: edit the drafted follow-up email.</summary>
+    [HttpPut("{id:guid}/follow-up-email")]
+    public async Task<IActionResult> UpdateFollowUpEmail(
+        Guid id, [FromBody] UpdateFollowUpEmailRequestDto request, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can edit the follow-up email.");
+        }
+
+        var email = await _analysisRepository.GetFollowUpEmailAsync(id, ct)
+            ?? throw new NotFoundException("No follow-up email has been drafted for this meeting.");
+
+        if (email.Status == FollowUpEmailStatus.Sent)
+        {
+            throw new ConflictException("This email has already been sent and can no longer be edited.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Subject))
+        {
+            email.Subject = request.Subject.Trim();
+        }
+
+        email.BodyMarkdown = request.BodyMarkdown ?? string.Empty;
+        email.EditedByUserId = userId;
+
+        await _analysisRepository.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    /// <summary>Host-only: re-runs AI analysis. Requires an existing transcript.</summary>
+    [HttpPost("{id:guid}/analysis/retry")]
+    public async Task<IActionResult> RetryAnalysis(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can retry analysis.");
+        }
+
+        var transcript = await _transcriptRepository.GetByMeetingIdAsync(id, ct)
+            ?? throw new ConflictException("Analysis needs a transcript, and this meeting has not been transcribed.");
+
+        BackgroundJob.Enqueue<IAiAnalysisJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+
+        _logger.LogInformation("User {UserId} re-enqueued AI analysis for meeting {MeetingId}", userId, meeting.Id);
+        return Accepted();
+    }
+
+    internal static ActionItemDto ToDto(ActionItem item) => new()
+    {
+        Id = item.Id,
+        MeetingId = item.MeetingId,
+        Description = item.Description,
+        AssigneeUserId = item.AssigneeUserId,
+        AssigneeUsername = item.Assignee?.DisplayName is { Length: > 0 } name ? name : item.Assignee?.UserName,
+        AssigneeNameRaw = item.AssigneeNameRaw,
+        DueDateUtc = item.DueDateUtc,
+        Status = item.Status.ToString(),
+        CompletedUtc = item.CompletedUtc,
+        SourceStartMs = item.SourceUtterance?.StartMs,
+    };
 
     /// <summary>Shared host-or-participant access check used by the transcript/recording endpoints.</summary>
     private async Task<Meeting> EnsureCallerCanAccessMeetingAsync(Guid meetingId, CancellationToken ct)

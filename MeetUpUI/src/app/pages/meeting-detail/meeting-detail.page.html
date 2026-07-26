@@ -32,28 +32,166 @@
       }
     </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>Transcript</h2>
-        @if (transcriptState() === 'unavailable' && m.isHost) {
-          <button type="button" (click)="retryTranscript()" [disabled]="retrying()">
-            {{ retrying() ? 'Retrying...' : 'Retry transcription' }}
-          </button>
-        }
-      </div>
+    <nav class="tabs" role="tablist">
+      @for (tab of tabs; track tab.id) {
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          [class.active]="activeTab() === tab.id"
+          [attr.aria-selected]="activeTab() === tab.id"
+          (click)="selectTab(tab.id)">
+          {{ tab.label }}
+        </button>
+      }
+    </nav>
 
-      @switch (transcriptState()) {
-        @case ('loading') {
-          <p class="muted">Loading transcript...</p>
+    <section class="panel tab-panel">
+      @switch (activeTab()) {
+
+        @case ('overview') {
+          <div class="panel-head">
+            <h2>Overview</h2>
+            @if (summary(); as s) {
+              <span class="provider-badge" [title]="s.modelUsed + ' · ' + (s.generatedUtc | date:'medium')">
+                Analyzed with {{ s.providerDisplayName }}
+              </span>
+            }
+          </div>
+
+          @switch (summaryState()) {
+            @case ('loading') { <p class="muted">Loading summary...</p> }
+            @case ('ready') {
+              <p class="overview-text">{{ summary()?.overviewText }}</p>
+              @if (summary()?.keyTopics?.length) {
+                <div class="chips">
+                  @for (topic of summary()!.keyTopics; track topic) {
+                    <span class="chip">{{ topic }}</span>
+                  }
+                </div>
+              }
+            }
+            @case ('unavailable') {
+              <p class="muted">
+                This meeting has not been analysed yet. Analysis runs automatically once the
+                transcript is ready.
+              </p>
+              @if (m.isHost) {
+                <button type="button" class="primary" (click)="retryAnalysis()" [disabled]="retryingAnalysis()">
+                  {{ retryingAnalysis() ? 'Queueing...' : 'Run analysis' }}
+                </button>
+              }
+            }
+          }
         }
-        @case ('ready') {
-          <app-transcript-viewer [utterances]="utterances()" (seek)="seekAudio($event)" />
+
+        @case ('transcript') {
+          <div class="panel-head">
+            <h2>Transcript</h2>
+            @if (transcriptState() === 'unavailable' && m.isHost) {
+              <button type="button" (click)="retryTranscript()" [disabled]="retryingTranscript()">
+                {{ retryingTranscript() ? 'Retrying...' : 'Retry transcription' }}
+              </button>
+            }
+          </div>
+
+          @switch (transcriptState()) {
+            @case ('loading') { <p class="muted">Loading transcript...</p> }
+            @case ('ready') {
+              <app-transcript-viewer [utterances]="utterances()" (seek)="seekAudio($event)" />
+            }
+            @case ('unavailable') {
+              <p class="muted">
+                Transcript is not available yet. It is generated automatically a few minutes after a
+                recorded meeting ends.
+              </p>
+            }
+          }
         }
-        @case ('unavailable') {
-          <p class="muted">
-            Transcript is not available yet. It is generated automatically a few minutes after a
-            recorded meeting ends.
-          </p>
+
+        @case ('actions') {
+          <h2>Action Items</h2>
+          @if (!actionItems().length) {
+            <p class="muted">No action items were found for this meeting.</p>
+          } @else {
+            <ul class="action-list">
+              @for (item of actionItems(); track item.id) {
+                <li class="action-item" [class.done]="item.status === 'Done'">
+                  <input
+                    type="checkbox"
+                    [checked]="item.status === 'Done'"
+                    (change)="toggleActionItem(item)"
+                    [attr.aria-label]="'Mark \'' + item.description + '\' as done'" />
+                  <div class="action-body">
+                    <p class="action-description">{{ item.description }}</p>
+                    <div class="action-meta">
+                      <span class="assignee">{{ assigneeLabel(item) }}</span>
+                      @if (item.dueDateUtc) {
+                        <span class="due" [class.overdue]="isOverdue(item)">
+                          Due {{ item.dueDateUtc | date:'mediumDate' }}
+                        </span>
+                      }
+                    </div>
+                  </div>
+                </li>
+              }
+            </ul>
+          }
+        }
+
+        @case ('decisions') {
+          <h2>Decisions</h2>
+          @if (!decisions().length) {
+            <p class="muted">No decisions were recorded for this meeting.</p>
+          } @else {
+            <ul class="decision-list">
+              @for (d of decisions(); track d.id) {
+                <li class="decision-item">{{ d.description }}</li>
+              }
+            </ul>
+          }
+        }
+
+        @case ('email') {
+          <div class="panel-head">
+            <h2>Follow-up Email</h2>
+            @if (emailState() === 'ready' && m.isHost && !emailEditing()) {
+              <button type="button" (click)="startEditingEmail()">Edit</button>
+            }
+          </div>
+
+          @switch (emailState()) {
+            @case ('loading') { <p class="muted">Loading draft...</p> }
+            @case ('unavailable') {
+              <p class="muted">No follow-up email has been drafted yet.</p>
+            }
+            @case ('ready') {
+              @if (emailEditing()) {
+                <label class="field">
+                  <span>Subject</span>
+                  <input type="text" [ngModel]="emailDraftSubject()" (ngModelChange)="emailDraftSubject.set($event)" />
+                </label>
+                <label class="field">
+                  <span>Body (markdown)</span>
+                  <textarea rows="14" [ngModel]="emailDraftBody()" (ngModelChange)="emailDraftBody.set($event)"></textarea>
+                </label>
+                <div class="button-row">
+                  <button type="button" class="primary" (click)="saveEmail()" [disabled]="savingEmail()">
+                    {{ savingEmail() ? 'Saving...' : 'Save' }}
+                  </button>
+                  <button type="button" class="secondary" (click)="cancelEditingEmail()">Cancel</button>
+                  <!-- Sending is Phase 9; the draft is review/edit-only for now. -->
+                  <button type="button" disabled title="Sending arrives in a later phase">Send</button>
+                </div>
+              } @else {
+                <p class="email-subject"><strong>Subject:</strong> {{ email()?.subject }}</p>
+                <pre class="email-body">{{ email()?.bodyMarkdown }}</pre>
+                <div class="button-row">
+                  <button type="button" disabled title="Sending arrives in a later phase">Send</button>
+                </div>
+              }
+            }
+          }
         }
       }
     </section>

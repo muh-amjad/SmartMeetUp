@@ -2,6 +2,7 @@ using Hangfire;
 using MeetUp.Api.Entities;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
+using MeetUp.Api.Services.Ai;
 using MeetUp.Api.Services.AssemblyAi;
 
 namespace MeetUp.Api.Jobs;
@@ -9,10 +10,8 @@ namespace MeetUp.Api.Jobs;
 /// <summary>
 /// Runs once per recorded meeting: signs a download URL for the recording, submits it to
 /// AssemblyAI, polls until done, then persists the diarized transcript.
-/// No automatic Hangfire retries — a failed run marks the meeting Failed and leaves retrying
-/// to the explicit POST /transcript/retry endpoint, so state transitions stay predictable.
+/// Retry policy is declared on ITranscriptionJob (that is the type jobs are enqueued against).
 /// </summary>
-[AutomaticRetry(Attempts = 0)]
 public sealed class TranscriptionJob : ITranscriptionJob
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
@@ -22,6 +21,7 @@ public sealed class TranscriptionJob : ITranscriptionJob
     private readonly ITranscriptRepository _transcriptRepository;
     private readonly IBlobStorageService _blobStorage;
     private readonly IAssemblyAiClient _assemblyAiClient;
+    private readonly IAnalysisProviderFactory _analysisProviderFactory;
     private readonly ILogger<TranscriptionJob> _logger;
 
     public TranscriptionJob(
@@ -29,12 +29,14 @@ public sealed class TranscriptionJob : ITranscriptionJob
         ITranscriptRepository transcriptRepository,
         IBlobStorageService blobStorage,
         IAssemblyAiClient assemblyAiClient,
+        IAnalysisProviderFactory analysisProviderFactory,
         ILogger<TranscriptionJob> logger)
     {
         _meetingRepository = meetingRepository;
         _transcriptRepository = transcriptRepository;
         _blobStorage = blobStorage;
         _assemblyAiClient = assemblyAiClient;
+        _analysisProviderFactory = analysisProviderFactory;
         _logger = logger;
     }
 
@@ -97,13 +99,26 @@ public sealed class TranscriptionJob : ITranscriptionJob
 
             await _transcriptRepository.AddAsync(transcript, ct);
 
-            // No Phase 5 (AI analysis) or Phase 6 (speaker mapping) exist yet, so the pipeline
-            // stops here — the meeting is as "done" as the current phases make it.
-            meeting.Status = MeetingStatus.Ready;
+            // Hand off to AI analysis, which owns the transition to Ready. When no provider has an
+            // API key the meeting is already as finished as it can get, so complete it here instead
+            // of queueing work that could only fail.
+            var analysisAvailable = _analysisProviderFactory.GetDefault() is not null;
+            meeting.Status = analysisAvailable ? MeetingStatus.Processing : MeetingStatus.Ready;
+
             await _transcriptRepository.SaveChangesAsync(ct);
 
             _logger.LogInformation("Meeting {MeetingId} transcribed: {UtteranceCount} utterances",
                 meeting.Id, transcript.Utterances.Count);
+
+            if (analysisAvailable)
+            {
+                BackgroundJob.Enqueue<IAiAnalysisJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Meeting {MeetingId}: skipping AI analysis, no provider has an API key configured", meeting.Id);
+            }
         }
         catch (Exception ex)
         {

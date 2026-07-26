@@ -1,0 +1,45 @@
+<div class="settings-shell">
+  <header class="settings-header">
+    <div>
+      <p class="kicker">MeetUp Workbench</p>
+      <h1>Settings</h1>
+    </div>
+    <button type="button" class="secondary" (click)="back()">← Dashboard</button>
+  </header>
+
+  @if (loading()) {
+    <p class="muted">Loading settings...</p>
+  } @else {
+    <section class="panel">
+      <h2>AI analysis model</h2>
+
+      @if (!providers().length) {
+        <p class="muted">
+          No AI provider is configured on the server yet, so meetings are recorded and transcribed
+          but not analysed. Add an API key for at least one provider to enable this.
+        </p>
+      } @else {
+        <label class="field">
+          <span>Model used to analyse your meetings</span>
+          <select [ngModel]="selectedProviderKey()" (ngModelChange)="selectedProviderKey.set($event)">
+            <option [value]="useDefault">Use the default ({{ defaultProviderName() }})</option>
+            @for (p of providers(); track p.key) {
+              <option [value]="p.key">
+                {{ p.displayName }} — {{ p.isFree ? 'FREE' : 'PAID' }} · {{ p.contextWindow | number }} tokens
+              </option>
+            }
+          </select>
+        </label>
+
+        <p class="hint">
+          Applies to your next meeting only. Meetings that have already been analysed keep the model
+          that produced them.
+        </p>
+
+        <button type="button" class="primary" (click)="save()" [disabled]="saving()">
+          {{ saving() ? 'Saving...' : 'Save preference' }}
+        </button>
+      }
+    </section>
+  }
+</div>

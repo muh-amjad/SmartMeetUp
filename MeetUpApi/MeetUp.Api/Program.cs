@@ -5,6 +5,7 @@ using MeetUp.Api.Jobs;
 using MeetUp.Api.Options;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
+using MeetUp.Api.Services.Ai;
 using MeetUp.Api.Services.AssemblyAi;
 using MeetUp.Api.Infrastructure.Middleware;
 using MeetUp.Api.Infrastructure.Logging;
@@ -49,6 +50,7 @@ namespace MeetUp.Api
             builder.Services.Configure<BlobStorageOptions>(builder.Configuration.GetSection(BlobStorageOptions.SectionName));
             builder.Services.Configure<AdminBootstrapOptions>(builder.Configuration.GetSection(AdminBootstrapOptions.SectionName));
             builder.Services.Configure<AssemblyAiOptions>(builder.Configuration.GetSection(AssemblyAiOptions.SectionName));
+            builder.Services.Configure<AiProvidersOptions>(builder.Configuration.GetSection(AiProvidersOptions.SectionName));
 
             builder.Services.AddDbContext<AppDbContext>(options =>
                 options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -72,12 +74,24 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IMeetingParticipantRepository, MeetingParticipantRepository>();   // ← naya
             builder.Services.AddScoped<IChatMessageRepository, ChatMessageRepository>();                 // ← naya
             builder.Services.AddScoped<ITranscriptRepository, TranscriptRepository>();
+            builder.Services.AddScoped<IMeetingAnalysisRepository, MeetingAnalysisRepository>();
 
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
             builder.Services.AddSingleton<ILiveKitService, LiveKitService>();
             builder.Services.AddScoped<IBlobStorageService, S3BlobStorageService>();
             builder.Services.AddScoped<ITranscriptionJob, TranscriptionJob>();
+            builder.Services.AddScoped<IAiAnalysisJob, AiAnalysisJob>();
+
+            // The registry builds one provider per configured API key, so it needs a plain named
+            // client rather than a typed one (base address and auth differ per provider).
+            builder.Services.AddHttpClient("ai-analysis", client =>
+            {
+                // LLM calls on a long transcript routinely outlast the 100s default.
+                client.Timeout = TimeSpan.FromMinutes(5);
+            });
+            builder.Services.AddSingleton<AnalysisProviderRegistry>();
+            builder.Services.AddScoped<IAnalysisProviderFactory, AnalysisProviderFactory>();
 
             builder.Services.AddHttpClient<IAssemblyAiClient, AssemblyAiClient>((sp, client) =>
             {

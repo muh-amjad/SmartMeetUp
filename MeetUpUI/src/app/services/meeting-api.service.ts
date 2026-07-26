@@ -2,6 +2,14 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { inject, Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
+import {
+  ActionItemDto,
+  DecisionDto,
+  FollowUpEmailDto,
+  MeetingSummaryDto,
+  UpdateActionItemRequestDto,
+  UpdateFollowUpEmailRequestDto,
+} from '../dtos/meetings/analysis.dto';
 import { ChatMessageDto } from '../dtos/meetings/chat-message.dto';
 import { CreateMeetingResponseDto } from '../dtos/meetings/create-meeting-response.dto';
 import { JoinMeetingResponseDto } from '../dtos/meetings/join-meeting-response.dto';
@@ -76,5 +84,46 @@ export class MeetingApiService {
   /** Host-only: re-run transcription after a failure. */
   retryTranscript(meetingId: string): Observable<void> {
     return this.http.post<void>(`${this.baseUrl}/${meetingId}/transcript/retry`, {});
+  }
+
+  /** AI-generated overview and key topics. */
+  getSummary(meetingId: string): Observable<MeetingSummaryDto> {
+    return this.http.get<MeetingSummaryDto>(`${this.baseUrl}/${meetingId}/summary`);
+  }
+
+  getActionItems(meetingId: string): Observable<ActionItemDto[]> {
+    return this.http.get<ActionItemDto[]>(`${this.baseUrl}/${meetingId}/action-items`);
+  }
+
+  getDecisions(meetingId: string): Observable<DecisionDto[]> {
+    return this.http.get<DecisionDto[]>(`${this.baseUrl}/${meetingId}/decisions`);
+  }
+
+  getFollowUpEmail(meetingId: string): Observable<FollowUpEmailDto> {
+    return this.http.get<FollowUpEmailDto>(`${this.baseUrl}/${meetingId}/follow-up-email`);
+  }
+
+  /** Host-only: save edits to the drafted follow-up email. */
+  updateFollowUpEmail(
+    meetingId: string,
+    payload: UpdateFollowUpEmailRequestDto,
+  ): Observable<void> {
+    return this.http.put<void>(`${this.baseUrl}/${meetingId}/follow-up-email`, payload);
+  }
+
+  /** Host-only: re-run AI analysis over an existing transcript. */
+  retryAnalysis(meetingId: string): Observable<void> {
+    return this.http.post<void>(`${this.baseUrl}/${meetingId}/analysis/retry`, {});
+  }
+
+  /** Update an action item (status toggle, edit, reassign, due date). */
+  updateActionItem(
+    actionItemId: string,
+    payload: UpdateActionItemRequestDto,
+  ): Observable<ActionItemDto> {
+    return this.http.patch<ActionItemDto>(
+      `${environment.apiBaseUrl}/api/action-items/${actionItemId}`,
+      payload,
+    );
   }
 }

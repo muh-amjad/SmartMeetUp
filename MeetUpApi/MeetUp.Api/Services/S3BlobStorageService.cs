@@ -28,6 +28,7 @@ public sealed class S3BlobStorageService : IBlobStorageService
             ServiceURL = _options.ServiceUrl,
             ForcePathStyle = _options.ForcePathStyle,
             AuthenticationRegion = _options.Region,
+            UseHttp = IsPlainHttpEndpoint,
         };
 
         _client = new AmazonS3Client(_options.AccessKey, _options.SecretKey, config);
@@ -44,8 +45,22 @@ public sealed class S3BlobStorageService : IBlobStorageService
         };
 
         // GetPreSignedURL is a local signature computation (no network call), so this stays sync-fast.
-        return Task.FromResult(_client.GetPreSignedURL(request));
+        var url = _client.GetPreSignedURL(request);
+
+        // The SDK's presigner hardcodes https:// for a custom ServiceURL — it honours neither the
+        // URL's own scheme nor Config.UseHttp (verified against AWSSDK.S3 3.7 and 4.0). Against a
+        // plain-HTTP MinIO that yields links nothing can open, so put the configured scheme back.
+        // Only the scheme is touched; the query-string signature stays exactly as signed.
+        if (IsPlainHttpEndpoint && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = string.Concat("http://", url.AsSpan("https://".Length));
+        }
+
+        return Task.FromResult(url);
     }
+
+    private bool IsPlainHttpEndpoint =>
+        _options.ServiceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
     public async Task DeleteAsync(string key, CancellationToken ct)
     {

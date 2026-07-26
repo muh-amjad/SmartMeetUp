@@ -12,6 +12,10 @@ namespace MeetUp.Api.Data
         public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
         public DbSet<Transcript> Transcripts => Set<Transcript>();
         public DbSet<TranscriptUtterance> TranscriptUtterances => Set<TranscriptUtterance>();
+        public DbSet<MeetingSummary> MeetingSummaries => Set<MeetingSummary>();
+        public DbSet<ActionItem> ActionItems => Set<ActionItem>();
+        public DbSet<Decision> Decisions => Set<Decision>();
+        public DbSet<FollowUpEmail> FollowUpEmails => Set<FollowUpEmail>();
 
         public AppDbContext(DbContextOptions<AppDbContext> options)
             : base(options)
@@ -155,6 +159,103 @@ namespace MeetUp.Api.Data
                 entity.HasOne(u => u.Participant)
                     .WithMany()
                     .HasForeignKey(u => u.ParticipantUserId)
+                    .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<MeetingSummary>(entity =>
+            {
+                entity.HasKey(s => s.Id);
+
+                // One summary per meeting — re-analysis replaces it rather than stacking up
+                entity.HasIndex(s => s.MeetingId)
+                    .IsUnique();
+
+                entity.Property(s => s.KeyTopics)
+                    .HasColumnType("jsonb");
+
+                entity.Property(s => s.ProviderKey)
+                    .HasMaxLength(60)
+                    .IsRequired();
+
+                entity.Property(s => s.ModelUsed)
+                    .HasMaxLength(120)
+                    .IsRequired();
+
+                entity.HasOne(s => s.Meeting)
+                    .WithMany()
+                    .HasForeignKey(s => s.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            builder.Entity<ActionItem>(entity =>
+            {
+                entity.HasKey(a => a.Id);
+
+                entity.Property(a => a.Description)
+                    .HasMaxLength(1000)
+                    .IsRequired();
+
+                entity.HasIndex(a => new { a.MeetingId, a.Status });
+
+                // "My open action items across all meetings" (dashboard widget in Phase 8)
+                entity.HasIndex(a => new { a.AssigneeUserId, a.Status });
+
+                entity.HasOne(a => a.Meeting)
+                    .WithMany()
+                    .HasForeignKey(a => a.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(a => a.Assignee)
+                    .WithMany()
+                    .HasForeignKey(a => a.AssigneeUserId)
+                    .OnDelete(DeleteBehavior.SetNull);
+
+                entity.HasOne(a => a.SourceUtterance)
+                    .WithMany()
+                    .HasForeignKey(a => a.SourceUtteranceId)
+                    .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<Decision>(entity =>
+            {
+                entity.HasKey(d => d.Id);
+
+                entity.Property(d => d.Description)
+                    .HasMaxLength(1000)
+                    .IsRequired();
+
+                entity.HasIndex(d => d.MeetingId);
+
+                entity.HasOne(d => d.Meeting)
+                    .WithMany()
+                    .HasForeignKey(d => d.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(d => d.SourceUtterance)
+                    .WithMany()
+                    .HasForeignKey(d => d.SourceUtteranceId)
+                    .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<FollowUpEmail>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                entity.Property(e => e.Subject)
+                    .HasMaxLength(300)
+                    .IsRequired();
+
+                entity.HasIndex(e => e.MeetingId)
+                    .IsUnique();
+
+                entity.HasOne(e => e.Meeting)
+                    .WithMany()
+                    .HasForeignKey(e => e.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(e => e.EditedBy)
+                    .WithMany()
+                    .HasForeignKey(e => e.EditedByUserId)
                     .OnDelete(DeleteBehavior.SetNull);
             });
         }

@@ -1,0 +1,98 @@
+.settings-shell {
+  padding: 32px 40px;
+  max-width: 760px;
+  margin: 0 auto;
+  color: #e5e7eb;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 32px;
+}
+
+.settings-header .kicker {
+  color: #94a3b8;
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+
+.settings-header h1 {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.secondary {
+  background: transparent;
+  color: #e5e7eb;
+  border: 1px solid #334155;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.secondary:hover {
+  background: #1e293b;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.panel {
+  border-top: 1px solid #1e293b;
+  padding-top: 24px;
+}
+
+.panel h2 {
+  font-size: 18px;
+  margin: 0 0 16px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.field span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.field select {
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e5e7eb;
+  padding: 8px 10px;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.hint {
+  color: #64748b;
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+.primary {
+  background: #3b82f6;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
