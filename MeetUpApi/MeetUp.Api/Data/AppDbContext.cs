@@ -12,6 +12,7 @@ namespace MeetUp.Api.Data
         public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
         public DbSet<Transcript> Transcripts => Set<Transcript>();
         public DbSet<TranscriptUtterance> TranscriptUtterances => Set<TranscriptUtterance>();
+        public DbSet<TranscriptChunk> TranscriptChunks => Set<TranscriptChunk>();
         public DbSet<MeetingSummary> MeetingSummaries => Set<MeetingSummary>();
         public DbSet<ActionItem> ActionItems => Set<ActionItem>();
         public DbSet<Decision> Decisions => Set<Decision>();
@@ -162,6 +163,45 @@ namespace MeetUp.Api.Data
                     .WithMany()
                     .HasForeignKey(u => u.ParticipantUserId)
                     .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<TranscriptChunk>(entity =>
+            {
+                entity.HasKey(c => c.Id);
+
+                entity.Property(c => c.Text).IsRequired();
+
+                entity.Property(c => c.Embedding)
+                    .HasColumnType("vector(768)");
+
+                // HNSW rather than the planned ivfflat: ivfflat needs lists tuned to row count
+                // (~rows/1000), and at demo scale lists=100 would leave ~0 vectors per list while
+                // the default probes=1 searches a single list — the index would silently miss
+                // almost every match. HNSW needs no such tuning and keeps recall high when small.
+                entity.HasIndex(c => c.Embedding)
+                    .HasMethod("hnsw")
+                    .HasOperators("vector_cosine_ops");
+
+                // Postgres maintains this; EF must never try to write it.
+                entity.Property(c => c.SearchVector)
+                    .HasColumnType("tsvector")
+                    .HasComputedColumnSql("to_tsvector('english', \"Text\")", stored: true);
+
+                entity.HasIndex(c => c.SearchVector)
+                    .HasMethod("GIN");
+
+                // Search always filters by the caller's meetings first, so lead with MeetingId.
+                entity.HasIndex(c => new { c.MeetingId, c.StartMs });
+
+                entity.HasOne(c => c.Meeting)
+                    .WithMany()
+                    .HasForeignKey(c => c.MeetingId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                entity.HasOne(c => c.Transcript)
+                    .WithMany()
+                    .HasForeignKey(c => c.TranscriptId)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
 
             builder.Entity<MeetingSummary>(entity =>

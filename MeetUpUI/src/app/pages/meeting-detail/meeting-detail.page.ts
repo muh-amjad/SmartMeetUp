@@ -1,5 +1,6 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import {
+  AfterViewInit,
   ChangeDetectionStrategy,
   Component,
   ElementRef,
@@ -35,7 +36,7 @@ type LoadState = 'loading' | 'ready' | 'unavailable';
   styleUrl: './meeting-detail.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class MeetingDetailPage implements OnInit {
+export class MeetingDetailPage implements OnInit, AfterViewInit {
   private readonly meetingApi = inject(MeetingApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -91,6 +92,12 @@ export class MeetingDetailPage implements OnInit {
       return;
     }
 
+    // Arriving from a search result: open the requested tab so the moment is visible.
+    const requestedTab = this.route.snapshot.queryParamMap.get('tab');
+    if (requestedTab && this.tabs.some((t) => t.id === requestedTab)) {
+      this.activeTab.set(requestedTab as DetailTab);
+    }
+
     await this.loadMeeting();
     await Promise.all([
       this.loadTranscript(),
@@ -98,6 +105,37 @@ export class MeetingDetailPage implements OnInit {
       this.loadAnalysis(),
       this.loadAnalytics(),
     ]);
+
+    // Seek only once the audio element and transcript exist, so the position sticks.
+    const seekMs = Number(this.route.snapshot.queryParamMap.get('seek'));
+    if (Number.isFinite(seekMs) && seekMs > 0) {
+      this.pendingSeekSeconds = seekMs / 1000;
+      this.applyPendingSeek();
+    }
+  }
+
+  private pendingSeekSeconds: number | null = null;
+
+  ngAfterViewInit(): void {
+    this.applyPendingSeek();
+  }
+
+  /**
+   * The audio element only exists once a recording URL has resolved, which can land either side of
+   * the view being initialised — so try from both places and clear the request once it lands.
+   */
+  private applyPendingSeek(): void {
+    if (this.pendingSeekSeconds === null) {
+      return;
+    }
+
+    const audio = this.audioPlayerRef?.nativeElement;
+    if (!audio) {
+      return;
+    }
+
+    audio.currentTime = this.pendingSeekSeconds;
+    this.pendingSeekSeconds = null;
   }
 
   private async loadAnalytics(): Promise<void> {

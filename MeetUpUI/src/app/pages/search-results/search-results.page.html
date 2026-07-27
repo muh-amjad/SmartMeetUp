@@ -1,0 +1,79 @@
+<div class="search-shell">
+  <header class="search-header">
+    <div>
+      <p class="kicker">MeetUp Workbench</p>
+      <h1>Search</h1>
+      <p class="hint">Searches transcripts of meetings you hosted or attended.</p>
+    </div>
+    <button type="button" class="secondary" (click)="back()">← Dashboard</button>
+  </header>
+
+  <form class="search-form" (ngSubmit)="submit()">
+    <input
+      type="search"
+      name="q"
+      placeholder="e.g. what did we decide about pricing?"
+      aria-label="Search your meetings"
+      [ngModel]="query()"
+      (ngModelChange)="query.set($event)" />
+    <button type="submit" class="primary" [disabled]="!query().trim() || searching()">
+      {{ searching() ? 'Searching...' : 'Search' }}
+    </button>
+  </form>
+
+  <div class="mode-row" role="group" aria-label="Search mode">
+    @for (m of modes; track m.id) {
+      <button
+        type="button"
+        class="mode-chip"
+        [class.active]="mode() === m.id"
+        [attr.aria-pressed]="mode() === m.id"
+        [title]="m.hint"
+        (click)="selectMode(m.id)">
+        {{ m.label }}
+      </button>
+    }
+  </div>
+
+  @if (searching()) {
+    <p class="muted">Searching...</p>
+  } @else if (hasSearched() && !groups().length) {
+    <div class="empty-state">
+      <h3>No matches</h3>
+      <p>
+        Nothing in your transcripts matched that. Only meetings that have been transcribed are
+        searchable.
+      </p>
+    </div>
+  } @else if (groups().length) {
+    <p class="result-count">
+      {{ results().length }} match(es) across {{ groups().length }} meeting(s)
+    </p>
+
+    <ul class="group-list">
+      @for (group of groups(); track group.meetingId) {
+        <li class="group">
+          <div class="group-head">
+            <h2>{{ group.meetingTitle }}</h2>
+            <span class="group-date">{{ group.meetingDate | date:'mediumDate' }}</span>
+          </div>
+
+          <ul class="hit-list">
+            @for (hit of group.hits; track hit.startMs) {
+              <li class="hit">
+                <button
+                  type="button"
+                  class="timestamp"
+                  (click)="jumpToMoment(hit)"
+                  [attr.aria-label]="'Jump to ' + formatTimestamp(hit.startMs) + ' in ' + group.meetingTitle">
+                  {{ formatTimestamp(hit.startMs) }}
+                </button>
+                <p class="snippet">{{ hit.snippet }}</p>
+              </li>
+            }
+          </ul>
+        </li>
+      }
+    </ul>
+  }
+</div>

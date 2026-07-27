@@ -620,6 +620,34 @@ public class MeetingsController : ControllerBase
         return Accepted();
     }
 
+    /// <summary>
+    /// Host-only: rebuilds this meeting's search index. Needed because indexing otherwise only
+    /// happens once, right after transcription — without this there is no way to recover a failed
+    /// index or to make a meeting transcribed before search existed searchable.
+    /// </summary>
+    [HttpPost("{id:guid}/search-index/rebuild")]
+    public async Task<IActionResult> RebuildSearchIndex(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can rebuild the search index.");
+        }
+
+        _ = await _transcriptRepository.GetByMeetingIdAsync(id, ct)
+            ?? throw new ConflictException("Indexing needs a transcript, and this meeting has not been transcribed.");
+
+        BackgroundJob.Enqueue<IEmbeddingJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
+
+        _logger.LogInformation("User {UserId} re-enqueued search indexing for meeting {MeetingId}", userId, meeting.Id);
+        return Accepted();
+    }
+
     internal static ActionItemDto ToDto(ActionItem item) => new()
     {
         Id = item.Id,

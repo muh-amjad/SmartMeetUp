@@ -7,6 +7,7 @@ using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
 using MeetUp.Api.Services.Ai;
 using MeetUp.Api.Services.AssemblyAi;
+using MeetUp.Api.Services.Search;
 using MeetUp.Api.Infrastructure.Middleware;
 using MeetUp.Api.Infrastructure.Logging;
 using FluentValidation;
@@ -52,8 +53,12 @@ namespace MeetUp.Api
             builder.Services.Configure<AssemblyAiOptions>(builder.Configuration.GetSection(AssemblyAiOptions.SectionName));
             builder.Services.Configure<AiProvidersOptions>(builder.Configuration.GetSection(AiProvidersOptions.SectionName));
 
+            // UseVector is what maps pgvector's Vector type; without it every read or write of an
+            // embedding column throws at runtime even though the model and migration look fine.
             builder.Services.AddDbContext<AppDbContext>(options =>
-                options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+                options.UseNpgsql(
+                    builder.Configuration.GetConnectionString("DefaultConnection"),
+                    npgsql => npgsql.UseVector()));
 
             builder.Services
                 .AddIdentityCore<ApplicationUser>(options =>
@@ -76,6 +81,7 @@ namespace MeetUp.Api
             builder.Services.AddScoped<ITranscriptRepository, TranscriptRepository>();
             builder.Services.AddScoped<IMeetingAnalysisRepository, MeetingAnalysisRepository>();
             builder.Services.AddScoped<IMeetingAnalyticsRepository, MeetingAnalyticsRepository>();
+            builder.Services.AddScoped<ISearchRepository, SearchRepository>();
 
             builder.Services.AddScoped<ITokenService, TokenService>();
             builder.Services.AddSingleton<IPresenceTracker, InMemoryPresenceTracker>();
@@ -84,6 +90,12 @@ namespace MeetUp.Api
             builder.Services.AddScoped<ITranscriptionJob, TranscriptionJob>();
             builder.Services.AddScoped<IAiAnalysisJob, AiAnalysisJob>();
             builder.Services.AddScoped<ISpeakerMappingJob, SpeakerMappingJob>();
+            builder.Services.AddScoped<IEmbeddingJob, EmbeddingJob>();
+            builder.Services.AddScoped<ISearchService, HybridSearchService>();
+            builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>(client =>
+            {
+                client.Timeout = TimeSpan.FromMinutes(2);
+            });
 
             // The registry builds one provider per configured API key, so it needs a plain named
             // client rather than a typed one (base address and auth differ per provider).

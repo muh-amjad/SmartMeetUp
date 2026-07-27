@@ -59,7 +59,7 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
 
             services.AddDbContext<AppDbContext>(options =>
             {
-                options.UseNpgsql(_postgres.GetConnectionString());
+                options.UseNpgsql(_postgres.GetConnectionString(), npgsql => npgsql.UseVector());
             });
 
             var serviceProvider = services.BuildServiceProvider();
