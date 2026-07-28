@@ -106,6 +106,112 @@ public class UserPreferencesController : ControllerBase
             .ToList();
     }
 
+    /// <summary>
+    /// Action items across all the caller's meetings.
+    /// </summary>
+    /// <param name="filter">all (default) · open · done · overdue · mine</param>
+    [HttpGet("action-items")]
+    public async Task<ActionResult<IReadOnlyList<ActionItemWithMeetingDto>>> GetActionItems(
+        [FromQuery] string filter = "all", CancellationToken ct = default)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var items = await _analysisRepository.GetActionItemsForUserAsync(userId, ct);
+        var now = DateTime.UtcNow;
+
+        var mapped = items.Select(item => new ActionItemWithMeetingDto
+        {
+            Id = item.Id,
+            MeetingId = item.MeetingId,
+            MeetingTitle = item.Meeting?.Title ?? string.Empty,
+            MeetingDate = item.Meeting?.ActualStartUtc ?? item.Meeting?.CreatedUtc ?? item.CreatedUtc,
+            Description = item.Description,
+            AssigneeUserId = item.AssigneeUserId,
+            AssigneeUsername = item.Assignee?.DisplayName is { Length: > 0 } name
+                ? name
+                : item.Assignee?.UserName,
+            AssigneeNameRaw = item.AssigneeNameRaw,
+            DueDateUtc = item.DueDateUtc,
+            Status = item.Status.ToString(),
+            IsOverdue = item.Status == ActionItemStatus.Open
+                        && item.DueDateUtc.HasValue
+                        && item.DueDateUtc.Value < now,
+            IsAssignedToMe = item.AssigneeUserId == userId,
+            CompletedUtc = item.CompletedUtc,
+        });
+
+        mapped = filter.ToLowerInvariant() switch
+        {
+            "open" => mapped.Where(i => i.Status == nameof(ActionItemStatus.Open)),
+            "done" => mapped.Where(i => i.Status == nameof(ActionItemStatus.Done)),
+            "overdue" => mapped.Where(i => i.IsOverdue),
+            "mine" => mapped.Where(i => i.IsAssignedToMe),
+            "all" => mapped,
+            _ => throw new Infrastructure.Exceptions.ValidationException(
+                nameof(filter), [$"Unknown filter '{filter}'. Expected all, open, done, overdue or mine."]),
+        };
+
+        return Ok(mapped.ToList());
+    }
+
+    [HttpGet("profile")]
+    public async Task<ActionResult<ProfileDto>> GetProfile()
+    {
+        var user = await GetCurrentUserAsync();
+
+        return Ok(new ProfileDto
+        {
+            UserId = user.Id,
+            Username = user.UserName ?? string.Empty,
+            Email = user.Email ?? string.Empty,
+            DisplayName = user.DisplayName,
+        });
+    }
+
+    [HttpPatch("profile")]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequestDto request)
+    {
+        var user = await GetCurrentUserAsync();
+
+        var displayName = request.DisplayName?.Trim() ?? string.Empty;
+        if (displayName.Length is 0 or > 120)
+        {
+            throw new Infrastructure.Exceptions.ValidationException(
+                nameof(request.DisplayName), ["Display name must be between 1 and 120 characters."]);
+        }
+
+        user.DisplayName = displayName;
+        var result = await _userManager.UpdateAsync(user);
+
+        if (!result.Succeeded)
+        {
+            throw new Infrastructure.Exceptions.ValidationException(
+                nameof(request.DisplayName), result.Errors.Select(e => e.Description).ToArray());
+        }
+
+        return NoContent();
+    }
+
+    [HttpPost("password")]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequestDto request)
+    {
+        var user = await GetCurrentUserAsync();
+
+        // Identity verifies the current password itself, so a wrong one surfaces as a validation
+        // error rather than silently succeeding.
+        var result = await _userManager.ChangePasswordAsync(
+            user, request.CurrentPassword ?? string.Empty, request.NewPassword ?? string.Empty);
+
+        if (!result.Succeeded)
+        {
+            throw new Infrastructure.Exceptions.ValidationException(
+                nameof(request.NewPassword), result.Errors.Select(e => e.Description).ToArray());
+        }
+
+        return NoContent();
+    }
+
     private static DateTime StartOfWeekUtc(DateTime value)
     {
         var date = DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);

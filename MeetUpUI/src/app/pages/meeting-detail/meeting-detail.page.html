@@ -1,7 +1,9 @@
 <div class="detail-shell">
-  <header class="detail-header">
-    <button type="button" class="secondary" (click)="back()">← Meetings</button>
-  </header>
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a routerLink="/meetings">Meetings</a>
+    <span aria-hidden="true">/</span>
+    <span class="crumb-current">{{ meeting()?.title ?? 'Loading…' }}</span>
+  </nav>
 
   @if (loading()) {
     <p class="loading">Loading meeting...</p>
@@ -9,8 +11,30 @@
 
   @if (meeting(); as m) {
     <section class="meeting-summary">
-      <p class="kicker">Meeting</p>
-      <h1>{{ m.title }}</h1>
+      @if (editingTitle()) {
+        <div class="title-edit">
+          <input
+            type="text"
+            maxlength="200"
+            aria-label="Meeting title"
+            [ngModel]="titleDraft()"
+            (ngModelChange)="titleDraft.set($event)"
+            name="meetingTitle" />
+          <button type="button" class="primary" (click)="saveTitle()" [disabled]="savingTitle() || !titleDraft().trim()">
+            {{ savingTitle() ? 'Saving…' : 'Save' }}
+          </button>
+          <button type="button" class="secondary" (click)="cancelTitleEdit()">Cancel</button>
+        </div>
+      } @else {
+        <div class="title-row">
+          <h1>{{ m.title }}</h1>
+          @if (m.isHost) {
+            <button type="button" class="ghost" (click)="startTitleEdit()" aria-label="Rename meeting">
+              Rename
+            </button>
+          }
+        </div>
+      }
       <div class="meta-row">
         <span class="status-badge">{{ m.status }}</span>
         <span>{{ m.actualStartUtc ? (m.actualStartUtc | date:'medium') : 'Not started' }}</span>

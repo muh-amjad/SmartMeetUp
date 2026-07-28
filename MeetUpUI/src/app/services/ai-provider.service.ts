@@ -4,7 +4,12 @@ import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
   AccountAnalyticsDto,
+  ActionItemFilter,
+  ActionItemWithMeetingDto,
   AnalysisProviderDto,
+  ChangePasswordRequestDto,
+  ProfileDto,
+  UpdateProfileRequestDto,
   UserPreferencesDto,
 } from '../dtos/meetings/analysis.dto';
 
@@ -29,5 +34,25 @@ export class AiProviderService {
   /** Account-wide meeting analytics (server defaults to the last 90 days). */
   getAccountAnalytics(): Observable<AccountAnalyticsDto> {
     return this.http.get<AccountAnalyticsDto>(`${this.baseUrl}/api/me/analytics`);
+  }
+
+  /** Action items across every meeting the caller took part in. */
+  getActionItems(filter: ActionItemFilter = 'all'): Observable<ActionItemWithMeetingDto[]> {
+    return this.http.get<ActionItemWithMeetingDto[]>(
+      `${this.baseUrl}/api/me/action-items`,
+      { params: { filter } },
+    );
+  }
+
+  getProfile(): Observable<ProfileDto> {
+    return this.http.get<ProfileDto>(`${this.baseUrl}/api/me/profile`);
+  }
+
+  updateProfile(payload: UpdateProfileRequestDto): Observable<void> {
+    return this.http.patch<void>(`${this.baseUrl}/api/me/profile`, payload);
+  }
+
+  changePassword(payload: ChangePasswordRequestDto): Observable<void> {
+    return this.http.post<void>(`${this.baseUrl}/api/me/password`, payload);
   }
 }

@@ -13,6 +13,12 @@ public interface IMeetingAnalysisRepository
 
     Task<IReadOnlyList<ActionItem>> GetActionItemsAsync(Guid meetingId, CancellationToken ct);
 
+    /// <summary>
+    /// Action items across every meeting the user hosted or attended — the cross-meeting view the
+    /// dashboard and the action-items page are built on.
+    /// </summary>
+    Task<IReadOnlyList<ActionItem>> GetActionItemsForUserAsync(string userId, CancellationToken ct);
+
     Task<ActionItem?> GetActionItemAsync(Guid actionItemId, CancellationToken ct);
 
     Task<IReadOnlyList<Decision>> GetDecisionsAsync(Guid meetingId, CancellationToken ct);

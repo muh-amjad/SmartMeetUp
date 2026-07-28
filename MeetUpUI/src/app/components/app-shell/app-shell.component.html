@@ -1,0 +1,64 @@
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" routerLink="/dashboard">
+      <span class="brand-mark">M</span>
+      <span class="brand-name">MeetUp</span>
+    </a>
+
+    <nav class="nav" aria-label="Main">
+      @for (item of nav; track item.path) {
+        <a
+          class="nav-link"
+          [routerLink]="item.path"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: item.path === '/meetings' }">
+          <span class="nav-mark" aria-hidden="true">{{ item.mark }}</span>
+          <span>{{ item.label }}</span>
+        </a>
+      }
+    </nav>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <form class="topbar-search" (ngSubmit)="submitSearch()" role="search">
+        <input
+          type="search"
+          placeholder="Search your meetings…"
+          aria-label="Search your meetings"
+          [ngModel]="searchQuery()"
+          (ngModelChange)="searchQuery.set($event)"
+          name="shellSearch" />
+      </form>
+
+      <div class="account">
+        <button
+          type="button"
+          class="avatar"
+          [attr.aria-expanded]="menuOpen()"
+          aria-haspopup="menu"
+          [attr.aria-label]="'Account menu for ' + username()"
+          (click)="toggleMenu()">
+          {{ initials() }}
+        </button>
+
+        @if (menuOpen()) {
+          <div class="menu" role="menu">
+            <div class="menu-identity">
+              <strong>{{ username() }}</strong>
+              <span>{{ email() }}</span>
+            </div>
+            <a class="menu-item" routerLink="/settings" role="menuitem" (click)="closeMenu()">Settings</a>
+            <button type="button" class="menu-item danger" role="menuitem" (click)="logout()">
+              Sign out
+            </button>
+          </div>
+        }
+      </div>
+    </header>
+
+    <main class="content">
+      <router-outlet />
+    </main>
+  </div>
+</div>

@@ -127,7 +127,4 @@ export class SearchResultsPage implements OnInit {
     });
   }
 
-  back(): void {
-    this.router.navigate(['/dashboard']);
-  }
 }

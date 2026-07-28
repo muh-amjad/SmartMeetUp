@@ -50,7 +50,6 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     query: ['', [Validators.required, Validators.minLength(2)]],
   });
 
-  readonly dashboardMode = signal<'dashboard' | 'call'>('call');
   readonly mediaError = signal('');
 
   readonly allUsers = this.usersFacade.users;
@@ -114,40 +113,35 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async ngOnInit(): Promise<void> {
-    const modeFromRoute = this.route.snapshot.data['mode'];
-    this.dashboardMode.set(modeFromRoute === 'dashboard' ? 'dashboard' : 'call');
-
     this.bindSignalrCallbacks();
     this.signalRService.attachSignalRHandlers();
     await this.signalRService.connectAndJoin();
     this.currentUserConnectionId.set(this.signalRService.connectionId);
 
-    if (this.dashboardMode() === 'call') {
-      const meetingIdFromUrl = this.route.snapshot.paramMap.get('meetingId');
-      const state = history.state as { source?: string; meetingId?: string } | undefined;
-      const meetingId = meetingIdFromUrl ?? state?.meetingId;
+    const meetingIdFromUrl = this.route.snapshot.paramMap.get('meetingId');
+    const state = history.state as { source?: string; meetingId?: string } | undefined;
+    const meetingId = meetingIdFromUrl ?? state?.meetingId;
 
-      if (meetingId) {
-        try {
-          await this.livekit.joinMeeting(meetingId);
-          await this.signalRService.setInCall(meetingId);
-          await this.loadChatHistory(meetingId);
-        } catch (err) {
-          this.mediaError.set('Could not join meeting. Please try again.');
-          console.error('joinMeeting failed', err);
-        }
-      } else if (state?.source === 'join-now') {
-        try {
-          const created = await firstValueFrom(this.meetingApi.create());
-          // Update URL so user can share/refresh
-          await this.router.navigate(['/meet', created.meetingId], { replaceUrl: true });
-          await this.livekit.joinMeeting(created.meetingId);
-          await this.signalRService.setInCall(created.meetingId);
-          await this.loadChatHistory(created.meetingId);
-        } catch (err) {
-          this.mediaError.set('Could not start meeting.');
-          console.error('startInstantMeeting failed', err);
-        }
+    if (meetingId) {
+      try {
+        await this.livekit.joinMeeting(meetingId);
+        await this.signalRService.setInCall(meetingId);
+        await this.loadChatHistory(meetingId);
+      } catch (err) {
+        this.mediaError.set('Could not join meeting. Please try again.');
+        console.error('joinMeeting failed', err);
+      }
+    } else if (state?.source === 'join-now') {
+      try {
+        const created = await firstValueFrom(this.meetingApi.create());
+        // Update URL so user can share/refresh
+        await this.router.navigate(['/meet', created.meetingId], { replaceUrl: true });
+        await this.livekit.joinMeeting(created.meetingId);
+        await this.signalRService.setInCall(created.meetingId);
+        await this.loadChatHistory(created.meetingId);
+      } catch (err) {
+        this.mediaError.set('Could not start meeting.');
+        console.error('startInstantMeeting failed', err);
       }
     }
   }
@@ -164,7 +158,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    if (this.dashboardMode() === 'call' && this.currentMeetingId() && !this.isEndingCall) {
+    if (this.currentMeetingId() && !this.isEndingCall) {
       void this.livekit.leaveMeeting();
       void this.signalRService.setLeftCall();
     }
@@ -220,15 +214,10 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       const meeting = await firstValueFrom(this.meetingApi.create());
       await this.signalRService.inviteToMeeting(user.id, meeting.meetingId);
 
-      if (this.dashboardMode() === 'dashboard') {
-        // Move to the meeting page so we see our own video while ringing
-        await this.router.navigate(['/meet', meeting.meetingId]);
-      } else {
-        // Already in call mode — join directly
-        await this.livekit.joinMeeting(meeting.meetingId);
-        await this.signalRService.setInCall(meeting.meetingId);
-        await this.loadChatHistory(meeting.meetingId);
-      }
+      // Already in the room, so join the new meeting directly.
+      await this.livekit.joinMeeting(meeting.meetingId);
+      await this.signalRService.setInCall(meeting.meetingId);
+      await this.loadChatHistory(meeting.meetingId);
     } catch (err) {
       this.ringingMessage.set('');
       this.mediaError.set('Could not start the call.');
@@ -252,9 +241,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     //   try { await firstValueFrom(this.meetingApi.end(meetingId)); } catch { /* ignore */ }
     // }
 
-    if (this.dashboardMode() === 'call') {
-      await this.router.navigate(['/dashboard']);
-    }
+    await this.router.navigate(['/dashboard']);
   }
 
   async logout(): Promise<void> {
@@ -263,28 +250,9 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     this.authService.logout();
   }
 
-  goHome(): void {
-    this.router.navigate(['/']);
-  }
-
-  goToHistory(): void {
-    this.router.navigate(['/meetings']);
-  }
-
-  goToSettings(): void {
-    this.router.navigate(['/settings']);
-  }
-
-  goToAnalytics(): void {
-    this.router.navigate(['/analytics']);
-  }
-
-  goToSearch(): void {
-    this.router.navigate(['/search']);
-  }
-
-  openSupport(): void {
-    window.alert('Support chat widget is ready. We can wire behavior in the next step.');
+  /** The call room sits outside the app shell, so it carries its own way back to the nav. */
+  goToDashboard(): void {
+    this.router.navigate(['/dashboard']);
   }
 
   startInstantMeeting(): void {
@@ -321,18 +289,9 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
-    if (this.dashboardMode() === 'dashboard') {
-      // Navigate to /meet/:meetingId — ngOnInit there reads the meetingId from
-      // the URL and calls joinMeeting() itself. Don't ALSO join here: both
-      // calls would race to connect() the same singleton LivekitMeetingService
-      // for the same participant, and one connection attempt loses.
-      void this.signalRService.respondToInvite(invite.inviteId, true);
-      this.router.navigate(['/meet', invite.meetingId]);
-      this.incomingInvite.set(null);
-      return;
-    }
-
-    // In call mode, we can join right here
+    // Already in the room, so join right here. (The dashboard takes the other route: it
+    // navigates to /meet/:meetingId and lets ngOnInit join, rather than joining twice and
+    // racing two connect() calls against the same singleton LivekitMeetingService.)
     void this.signalRService.respondToInvite(invite.inviteId, true);
     void this.livekit.joinMeeting(invite.meetingId).catch((err) => {
       this.mediaError.set('Could not join the call.');

@@ -1,15 +1,96 @@
 <div class="settings-shell">
-  <header class="settings-header">
-    <div>
-      <p class="kicker">MeetUp Workbench</p>
-      <h1>Settings</h1>
-    </div>
-    <button type="button" class="secondary" (click)="back()">← Dashboard</button>
+  <header class="settings-head">
+    <h1>Settings</h1>
+    <p class="hint">Your account and how meetings get analysed.</p>
   </header>
 
   @if (loading()) {
-    <p class="muted">Loading settings...</p>
+    <p class="muted">Loading settings…</p>
   } @else {
+    <section class="panel">
+      <h2>Account</h2>
+
+      <dl class="readonly-fields">
+        <dt>Username</dt>
+        <dd>{{ username() }}</dd>
+        <dt>Email</dt>
+        <dd>{{ email() }}</dd>
+      </dl>
+
+      <label class="field" for="displayName">
+        <span>Display name</span>
+        <input
+          id="displayName"
+          type="text"
+          maxlength="120"
+          [ngModel]="displayName()"
+          (ngModelChange)="displayName.set($event)"
+          name="displayName" />
+      </label>
+      <p class="hint small">This is the name shown on transcripts and action items.</p>
+
+      <button
+        type="button"
+        class="primary"
+        (click)="saveProfile()"
+        [disabled]="savingProfile() || !displayName().trim()">
+        {{ savingProfile() ? 'Saving…' : 'Save display name' }}
+      </button>
+    </section>
+
+    <section class="panel">
+      <h2>Password</h2>
+
+      <label class="field" for="currentPassword">
+        <span>Current password</span>
+        <input
+          id="currentPassword"
+          type="password"
+          autocomplete="current-password"
+          [ngModel]="currentPassword()"
+          (ngModelChange)="currentPassword.set($event)"
+          name="currentPassword" />
+      </label>
+
+      <label class="field" for="newPassword">
+        <span>New password</span>
+        <input
+          id="newPassword"
+          type="password"
+          autocomplete="new-password"
+          [ngModel]="newPassword()"
+          (ngModelChange)="newPassword.set($event)"
+          name="newPassword" />
+      </label>
+
+      <label class="field" for="confirmPassword">
+        <span>Confirm new password</span>
+        <input
+          id="confirmPassword"
+          type="password"
+          autocomplete="new-password"
+          [ngModel]="confirmPassword()"
+          (ngModelChange)="confirmPassword.set($event)"
+          name="confirmPassword" />
+      </label>
+
+      @if (passwordError()) {
+        <p class="error" role="alert">{{ passwordError() }}</p>
+      }
+
+      <p class="hint small">
+        At least 8 characters, with an uppercase letter, a lowercase letter and a number.
+      </p>
+
+      <button
+        type="button"
+        class="primary"
+        (click)="savePassword()"
+        [disabled]="savingPassword() || !currentPassword() || !newPassword()">
+        {{ savingPassword() ? 'Changing…' : 'Change password' }}
+      </button>
+    </section>
+
     <section class="panel">
       <h2>AI analysis model</h2>
 
@@ -19,9 +100,13 @@
           but not analysed. Add an API key for at least one provider to enable this.
         </p>
       } @else {
-        <label class="field">
+        <label class="field" for="provider">
           <span>Model used to analyse your meetings</span>
-          <select [ngModel]="selectedProviderKey()" (ngModelChange)="selectedProviderKey.set($event)">
+          <select
+            id="provider"
+            [ngModel]="selectedProviderKey()"
+            (ngModelChange)="selectedProviderKey.set($event)"
+            name="provider">
             <option [value]="useDefault">Use the default ({{ defaultProviderName() }})</option>
             @for (p of providers(); track p.key) {
               <option [value]="p.key">
@@ -31,13 +116,13 @@
           </select>
         </label>
 
-        <p class="hint">
+        <p class="hint small">
           Applies to your next meeting only. Meetings that have already been analysed keep the model
           that produced them.
         </p>
 
         <button type="button" class="primary" (click)="save()" [disabled]="saving()">
-          {{ saving() ? 'Saving...' : 'Save preference' }}
+          {{ saving() ? 'Saving…' : 'Save preference' }}
         </button>
       }
     </section>

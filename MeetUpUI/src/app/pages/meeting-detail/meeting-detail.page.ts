@@ -10,7 +10,7 @@ import {
   ViewChild,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import {
   ActionItemDto,
@@ -31,7 +31,7 @@ type LoadState = 'loading' | 'ready' | 'unavailable';
 @Component({
   selector: 'app-meeting-detail',
   standalone: true,
-  imports: [DatePipe, DecimalPipe, FormsModule, TranscriptViewerComponent],
+  imports: [DatePipe, DecimalPipe, FormsModule, RouterLink, TranscriptViewerComponent],
   templateUrl: './meeting-detail.page.html',
   styleUrl: './meeting-detail.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -77,6 +77,10 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
 
   readonly analytics = signal<MeetingAnalyticsDto | null>(null);
   readonly analyticsState = signal<LoadState>('loading');
+
+  readonly editingTitle = signal(false);
+  readonly titleDraft = signal('');
+  readonly savingTitle = signal(false);
 
   readonly retryingTranscript = signal(false);
   readonly retryingAnalysis = signal(false);
@@ -339,6 +343,38 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
     }
   }
 
+  startTitleEdit(): void {
+    this.titleDraft.set(this.meeting()?.title ?? '');
+    this.editingTitle.set(true);
+  }
+
+  cancelTitleEdit(): void {
+    this.editingTitle.set(false);
+  }
+
+  async saveTitle(): Promise<void> {
+    if (this.savingTitle()) {
+      return;
+    }
+
+    const title = this.titleDraft().trim();
+    if (!title) {
+      return;
+    }
+
+    this.savingTitle.set(true);
+    try {
+      await firstValueFrom(this.meetingApi.update(this.meetingId, { title }));
+      this.meeting.update((m) => (m ? { ...m, title } : m));
+      this.editingTitle.set(false);
+      this.toast.success('Meeting renamed.');
+    } catch {
+      this.toast.error('Could not rename the meeting.');
+    } finally {
+      this.savingTitle.set(false);
+    }
+  }
+
   seekAudio(seconds: number): void {
     const audio = this.audioPlayerRef?.nativeElement;
     if (audio) {
@@ -347,7 +383,4 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
     }
   }
 
-  back(): void {
-    this.router.navigate(['/meetings']);
-  }
 }

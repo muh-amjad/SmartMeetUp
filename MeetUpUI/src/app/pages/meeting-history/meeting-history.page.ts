@@ -50,10 +50,6 @@ export class MeetingHistoryPage implements OnInit {
     }
   }
 
-  backToDashboard(): void {
-    this.router.navigate(['/dashboard']);
-  }
-
   statusClass(status: string): string {
     switch (status) {
       case 'Live':       return 'status-live';

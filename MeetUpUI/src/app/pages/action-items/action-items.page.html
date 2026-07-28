@@ -1,0 +1,75 @@
+<div class="items-shell">
+  <header class="items-head">
+    <h1>Action items</h1>
+    <p class="hint">Everything committed to across your meetings, pulled out automatically.</p>
+  </header>
+
+  <div class="filter-row" role="group" aria-label="Filter action items">
+    @for (f of filters; track f.id) {
+      <button
+        type="button"
+        class="filter-chip"
+        [class.active]="filter() === f.id"
+        [attr.aria-pressed]="filter() === f.id"
+        (click)="selectFilter(f.id)">
+        {{ f.label }}
+      </button>
+    }
+  </div>
+
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else if (!groups().length) {
+    <div class="empty-state">
+      <h3>Nothing here</h3>
+      <p>
+        @switch (filter()) {
+          @case ('open')    { No open action items — everything is done. }
+          @case ('overdue') { Nothing is overdue. }
+          @case ('mine')    { Nothing is assigned to you right now. }
+          @case ('done')    { Nothing has been completed yet. }
+          @default          { Action items appear here once your meetings have been analysed. }
+        }
+      </p>
+    </div>
+  } @else {
+    <ul class="group-list">
+      @for (group of groups(); track group.meetingId) {
+        <li class="group">
+          <div class="group-head">
+            <a class="group-title" [routerLink]="['/meetings', group.meetingId]">
+              {{ group.meetingTitle }}
+            </a>
+            <span class="group-date">{{ group.meetingDate | date:'mediumDate' }}</span>
+          </div>
+
+          <ul class="item-list">
+            @for (item of group.items; track item.id) {
+              <li class="item" [class.done]="item.status === 'Done'">
+                <input
+                  type="checkbox"
+                  [checked]="item.status === 'Done'"
+                  (change)="toggle(item)"
+                  [attr.aria-label]="'Mark \'' + item.description + '\' as done'" />
+                <div class="item-body">
+                  <p class="item-text">{{ item.description }}</p>
+                  <div class="item-meta">
+                    <span>{{ assigneeLabel(item) }}</span>
+                    @if (item.dueDateUtc) {
+                      <span class="due" [class.overdue]="item.isOverdue">
+                        Due {{ item.dueDateUtc | date:'mediumDate' }}{{ item.isOverdue ? ' · overdue' : '' }}
+                      </span>
+                    }
+                    @if (item.status === 'Done' && item.completedUtc) {
+                      <span>Completed {{ item.completedUtc | date:'mediumDate' }}</span>
+                    }
+                  </div>
+                </div>
+              </li>
+            }
+          </ul>
+        </li>
+      }
+    </ul>
+  }
+</div>

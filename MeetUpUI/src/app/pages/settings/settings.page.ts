@@ -1,7 +1,6 @@
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AnalysisProviderDto } from '../../dtos/meetings/analysis.dto';
 import { AiProviderService } from '../../services/ai-provider.service';
@@ -21,7 +20,6 @@ const USE_DEFAULT = '';
 export class SettingsPage implements OnInit {
   private readonly aiProviders = inject(AiProviderService);
   private readonly toast = inject(ToastService);
-  private readonly router = inject(Router);
 
   readonly useDefault = USE_DEFAULT;
 
@@ -30,19 +28,86 @@ export class SettingsPage implements OnInit {
   readonly loading = signal(true);
   readonly saving = signal(false);
 
+  // ── Account ───────────────────────────────────────
+  readonly username = signal('');
+  readonly email = signal('');
+  readonly displayName = signal('');
+  readonly savingProfile = signal(false);
+
+  readonly currentPassword = signal('');
+  readonly newPassword = signal('');
+  readonly confirmPassword = signal('');
+  readonly savingPassword = signal(false);
+  readonly passwordError = signal('');
+
   async ngOnInit(): Promise<void> {
     this.loading.set(true);
     try {
-      const [providers, preferences] = await Promise.all([
+      const [providers, preferences, profile] = await Promise.all([
         firstValueFrom(this.aiProviders.getProviders()),
         firstValueFrom(this.aiProviders.getPreferences()),
+        firstValueFrom(this.aiProviders.getProfile()),
       ]);
       this.providers.set(providers);
       this.selectedProviderKey.set(preferences.preferredAnalysisProviderKey ?? USE_DEFAULT);
+      this.username.set(profile.username);
+      this.email.set(profile.email);
+      this.displayName.set(profile.displayName);
     } catch {
       this.toast.error('Could not load settings.');
     } finally {
       this.loading.set(false);
+    }
+  }
+
+  async saveProfile(): Promise<void> {
+    if (this.savingProfile()) {
+      return;
+    }
+    this.savingProfile.set(true);
+    try {
+      await firstValueFrom(
+        this.aiProviders.updateProfile({ displayName: this.displayName().trim() }),
+      );
+      this.toast.success('Display name saved.');
+    } catch {
+      this.toast.error('Could not save your display name.');
+    } finally {
+      this.savingProfile.set(false);
+    }
+  }
+
+  async savePassword(): Promise<void> {
+    if (this.savingPassword()) {
+      return;
+    }
+
+    this.passwordError.set('');
+
+    // Catch the mismatch here rather than sending a request that can only fail.
+    if (this.newPassword() !== this.confirmPassword()) {
+      this.passwordError.set('The new passwords do not match.');
+      return;
+    }
+
+    this.savingPassword.set(true);
+    try {
+      await firstValueFrom(
+        this.aiProviders.changePassword({
+          currentPassword: this.currentPassword(),
+          newPassword: this.newPassword(),
+        }),
+      );
+      this.currentPassword.set('');
+      this.newPassword.set('');
+      this.confirmPassword.set('');
+      this.toast.success('Password changed.');
+    } catch {
+      this.passwordError.set(
+        'Could not change your password. Check your current password and try again.',
+      );
+    } finally {
+      this.savingPassword.set(false);
     }
   }
 
@@ -71,7 +136,4 @@ export class SettingsPage implements OnInit {
     }
   }
 
-  back(): void {
-    this.router.navigate(['/dashboard']);
-  }
 }

@@ -1,6 +1,5 @@
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, OnInit, signal } from '@angular/core';
-import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AccountAnalyticsDto, WeeklyBucketDto } from '../../dtos/meetings/analysis.dto';
 import { AiProviderService } from '../../services/ai-provider.service';
@@ -17,7 +16,6 @@ import { ToastService } from '../../services/toast.service';
 export class AnalyticsPage implements OnInit {
   private readonly aiProviders = inject(AiProviderService);
   private readonly toast = inject(ToastService);
-  private readonly router = inject(Router);
 
   readonly analytics = signal<AccountAnalyticsDto | null>(null);
   readonly loading = signal(true);
@@ -65,7 +63,4 @@ export class AnalyticsPage implements OnInit {
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
   }
 
-  back(): void {
-    this.router.navigate(['/dashboard']);
-  }
 }

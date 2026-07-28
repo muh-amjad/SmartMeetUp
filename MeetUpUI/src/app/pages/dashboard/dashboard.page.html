@@ -1,0 +1,153 @@
+<div class="dash">
+  @if (incomingInvite(); as invite) {
+    <div class="incoming-call-banner" role="alert">
+      <span><strong>{{ invite.fromUsername }}</strong> is calling…</span>
+      <div class="incoming-actions">
+        <button type="button" class="accept-btn" (click)="acceptIncoming()">Accept</button>
+        <button type="button" class="reject-btn" (click)="declineIncoming()">Decline</button>
+      </div>
+    </div>
+  }
+
+  @if (ringingMessage()) {
+    <div class="ringing-banner">{{ ringingMessage() }}</div>
+  }
+
+  <header class="dash-head">
+    <h1>{{ displayName() ? 'Welcome back, ' + displayName() : 'Dashboard' }}</h1>
+    <p class="hint">Start a call, or pick up where a meeting left off.</p>
+  </header>
+
+  <!-- Quick actions ─────────────────────────────────── -->
+  <section class="actions">
+    <article class="action-card">
+      <h2>Start an instant meeting</h2>
+      <p>Check your camera and mic, then open a room you can invite people into.</p>
+      <button type="button" class="primary" (click)="startInstantMeeting()">Start meeting</button>
+    </article>
+
+    <article class="action-card">
+      <h2>Call a teammate</h2>
+      <form [formGroup]="searchForm" (ngSubmit)="searchUsers()" class="inline-form">
+        <input type="text" formControlName="query" placeholder="Username or email" />
+        <button type="submit" class="secondary" [disabled]="searchForm.invalid || searching()">
+          {{ searching() ? 'Searching…' : 'Find' }}
+        </button>
+      </form>
+
+      <p class="search-message">{{ searchMessage() }}</p>
+
+      @if (searchResults().length) {
+        <ul class="people">
+          @for (person of searchResults(); track person.userId) {
+            <li class="search-item">
+              <div class="person">
+                <strong>{{ person.username }}</strong>
+                <span class="person-email">{{ person.email }}</span>
+              </div>
+              <span class="presence" [class.online]="person.isOnline">
+                {{ person.isOnline ? 'Online' : 'Offline' }}
+              </span>
+              <button
+                type="button"
+                class="secondary"
+                (click)="call(person)"
+                [disabled]="!person.isOnline || !person.connectionId">
+                Call
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    </article>
+  </section>
+
+  <!-- This week ─────────────────────────────────────── -->
+  <section class="stat-row">
+    <div class="stat-tile">
+      <span class="stat-label">Meetings this week</span>
+      <span class="stat-value">{{ thisWeek().meetings }}</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-label">Minutes this week</span>
+      <span class="stat-value">{{ thisWeek().minutes | number }}</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-label">Meetings (90 days)</span>
+      <span class="stat-value">{{ analytics()?.meetingCount ?? 0 }}</span>
+    </div>
+    <div class="stat-tile">
+      <span class="stat-label">Open action items</span>
+      <span class="stat-value">{{ openItems().length }}{{ openItems().length === 5 ? '+' : '' }}</span>
+    </div>
+  </section>
+
+  <div class="columns">
+    <!-- Recent meetings ─────────────────────────────── -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Recent meetings</h2>
+        <a routerLink="/meetings" class="link">All meetings</a>
+      </div>
+
+      @if (loading()) {
+        <p class="muted">Loading…</p>
+      } @else if (!recentMeetings().length) {
+        <p class="muted">No meetings yet. Start one above and it will show up here.</p>
+      } @else {
+        <ul class="rows">
+          @for (m of recentMeetings(); track m.meetingId) {
+            <li class="row">
+              <button type="button" class="row-main" (click)="openMeeting(m)">
+                <span class="row-title">{{ m.title }}</span>
+                <span class="row-meta">
+                  {{ m.actualStartUtc ? (m.actualStartUtc | date:'MMM d, h:mm a') : 'Not started' }}
+                  · {{ m.participantCount }} participant(s)
+                </span>
+              </button>
+              <span class="status-badge" [class]="statusClass(m.status)">{{ m.status }}</span>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+
+    <!-- Open action items ───────────────────────────── -->
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Open action items</h2>
+        <a routerLink="/action-items" class="link">All items</a>
+      </div>
+
+      @if (loading()) {
+        <p class="muted">Loading…</p>
+      } @else if (!openItems().length) {
+        <p class="muted">
+          Nothing outstanding. Action items are pulled out of meetings automatically once they are
+          analysed.
+        </p>
+      } @else {
+        <ul class="rows">
+          @for (item of openItems(); track item.id) {
+            <li class="row">
+              <a class="row-main" [routerLink]="['/meetings', item.meetingId]">
+                <span class="row-title">{{ item.description }}</span>
+                <span class="row-meta">
+                  {{ item.meetingTitle }}
+                  @if (item.assigneeUsername || item.assigneeNameRaw) {
+                    · {{ item.assigneeUsername ?? item.assigneeNameRaw }}
+                  }
+                </span>
+              </a>
+              @if (item.dueDateUtc) {
+                <span class="due" [class.overdue]="item.isOverdue">
+                  {{ item.dueDateUtc | date:'MMM d' }}
+                </span>
+              }
+            </li>
+          }
+        </ul>
+      }
+    </section>
+  </div>
+</div>

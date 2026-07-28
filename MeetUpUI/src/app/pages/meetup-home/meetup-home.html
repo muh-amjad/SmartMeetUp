@@ -2,25 +2,13 @@
   <header class="top-bar">
     <div>
       <p class="kicker">MeetUp Workbench</p>
-      <h1>{{ dashboardMode() === 'dashboard' ? 'Dashboard' : 'Meeting Room' }}</h1>
+      <h1>Meeting Room</h1>
       <p class="identity">{{ currentUsername() }} • {{ currentEmail() }}</p>
     </div>
 
     <div class="header-actions">
-      @if (dashboardMode() === 'dashboard') {
-        <button type="button" class="primary" (click)="startInstantMeeting()">
-          Instant Meeting
-        </button>
-        <button type="button" class="secondary" (click)="goToHistory()">My Meetings</button>
-        <button type="button" class="secondary" (click)="goToSearch()">Search</button>
-        <button type="button" class="secondary" (click)="goToAnalytics()">Analytics</button>
-        <button type="button" class="secondary" (click)="goToSettings()">Settings</button>
-      }
-      @if (dashboardMode() === 'call') {
-        <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
-      }
-      <button type="button" class="secondary" (click)="goHome()">Home</button>
-      <button type="button" class="danger" (click)="logout()">Logout</button>
+      <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
+      <button type="button" class="secondary" (click)="goToDashboard()">Dashboard</button>
     </div>
   </header>
 
@@ -72,24 +60,8 @@
     </div>
   </section>
 
-  <main class="main-grid" [class.main-grid-call]="dashboardMode() === 'call'">
-    <section class="content-section" [class.content-section-call]="dashboardMode() === 'call'">
-      @if (dashboardMode() === 'dashboard') {
-        <article class="dashboard-hero">
-          <h2>Start conversations in one click</h2>
-          <p>
-            Use Instant Meeting for quick calls or call online teammates directly from the user
-            panel.
-          </p>
-          <div class="hero-actions">
-            <button type="button" class="primary" (click)="startInstantMeeting()">
-              Start Instant Meeting
-            </button>
-          </div>
-        </article>
-      }
-
-      @if (dashboardMode() === 'call') {
+  <main class="main-grid main-grid-call">
+    <section class="content-section content-section-call">
         <div class="stage-with-chat">
         <section class="meeting-stage">
           @if (mediaError()) {
@@ -185,7 +157,6 @@
           </button>
           <button type="button" class="danger" (click)="endCall()">End Call</button>
         </div>
-      }
     </section>
 
     <aside class="users-section">
@@ -210,9 +181,4 @@
       }
     </aside>
   </main>
-
-  <button type="button" class="support-fab" (click)="openSupport()" aria-label="Open support chat">
-    <span>?</span>
-    <strong>Support</strong>
-  </button>
 </div>

@@ -24,6 +24,19 @@ public sealed class MeetingAnalysisRepository : IMeetingAnalysisRepository
             .OrderBy(a => a.CreatedUtc)
             .ToListAsync(ct);
 
+    public async Task<IReadOnlyList<ActionItem>> GetActionItemsForUserAsync(string userId, CancellationToken ct) =>
+        await _dbContext.ActionItems
+            .Include(a => a.Assignee)
+            .Include(a => a.Meeting)
+            .Where(a =>
+                a.Meeting!.HostUserId == userId ||
+                a.Meeting.Participants.Any(p => p.UserId == userId))
+            // Open work first, then soonest due, then newest — the order the UI wants by default.
+            .OrderBy(a => a.Status)
+            .ThenBy(a => a.DueDateUtc ?? DateTime.MaxValue)
+            .ThenByDescending(a => a.CreatedUtc)
+            .ToListAsync(ct);
+
     public Task<ActionItem?> GetActionItemAsync(Guid actionItemId, CancellationToken ct) =>
         _dbContext.ActionItems
             .Include(a => a.Meeting)

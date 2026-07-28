@@ -71,3 +71,40 @@ public sealed class UserPreferencesDto
 {
     public string? PreferredAnalysisProviderKey { get; set; }
 }
+
+/// <summary>An action item plus the meeting it came from, for the cross-meeting list.</summary>
+public sealed class ActionItemWithMeetingDto
+{
+    public Guid Id { get; set; }
+    public Guid MeetingId { get; set; }
+    public string MeetingTitle { get; set; } = string.Empty;
+    public DateTime MeetingDate { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public string? AssigneeUserId { get; set; }
+    public string? AssigneeUsername { get; set; }
+    public string? AssigneeNameRaw { get; set; }
+    public DateTime? DueDateUtc { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public bool IsOverdue { get; set; }
+    public bool IsAssignedToMe { get; set; }
+    public DateTime? CompletedUtc { get; set; }
+}
+
+public sealed class UpdateProfileRequestDto
+{
+    public string DisplayName { get; set; } = string.Empty;
+}
+
+public sealed class ChangePasswordRequestDto
+{
+    public string CurrentPassword { get; set; } = string.Empty;
+    public string NewPassword { get; set; } = string.Empty;
+}
+
+public sealed class ProfileDto
+{
+    public string UserId { get; set; } = string.Empty;
+    public string Username { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+}

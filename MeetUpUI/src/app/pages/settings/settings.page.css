@@ -1,42 +1,19 @@
 .settings-shell {
-  padding: 32px 40px;
-  max-width: 760px;
+  padding: 28px 32px 64px;
+  max-width: 720px;
   margin: 0 auto;
   color: #e5e7eb;
 }
 
-.settings-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 32px;
+.settings-head {
+  margin-bottom: 8px;
 }
 
-.settings-header .kicker {
-  color: #94a3b8;
-  font-size: 12px;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
+.settings-head h1 {
   margin: 0 0 4px;
-}
-
-.settings-header h1 {
-  margin: 0;
-  font-size: 32px;
+  font-size: 26px;
   font-weight: 700;
-}
-
-.secondary {
-  background: transparent;
-  color: #e5e7eb;
-  border: 1px solid #334155;
-  padding: 8px 16px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.secondary:hover {
-  background: #1e293b;
+  letter-spacing: -0.015em;
 }
 
 .muted {
@@ -46,11 +23,31 @@
 .panel {
   border-top: 1px solid #1e293b;
   padding-top: 24px;
+  margin-top: 28px;
 }
 
 .panel h2 {
-  font-size: 18px;
-  margin: 0 0 16px;
+  font-size: 17px;
+  margin: 0 0 18px;
+  font-weight: 650;
+}
+
+/* Identity the user can see but not change here. */
+.readonly-fields {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 6px 16px;
+  margin: 0 0 20px;
+  font-size: 14px;
+}
+
+.readonly-fields dt {
+  color: #94a3b8;
+}
+
+.readonly-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .field {
@@ -65,21 +62,34 @@
   color: #94a3b8;
 }
 
+.field input,
 .field select {
   width: 100%;
   background: #0f172a;
   border: 1px solid #334155;
-  border-radius: 4px;
+  border-radius: 5px;
   color: #e5e7eb;
-  padding: 8px 10px;
+  padding: 9px 11px;
   font: inherit;
+  font-size: 14px;
   box-sizing: border-box;
 }
 
+.error {
+  color: #fca5a5;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+
 .hint {
+  color: #94a3b8;
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+
+.hint.small {
   color: #64748b;
   font-size: 13px;
-  margin: 0 0 16px;
 }
 
 .primary {

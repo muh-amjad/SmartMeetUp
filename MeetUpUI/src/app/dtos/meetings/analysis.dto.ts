@@ -85,6 +85,40 @@ export interface WeeklyBucketDto {
   totalMinutes: number;
 }
 
+export type ActionItemFilter = 'all' | 'open' | 'done' | 'overdue' | 'mine';
+
+export interface ActionItemWithMeetingDto {
+  id: string;
+  meetingId: string;
+  meetingTitle: string;
+  meetingDate: string;
+  description: string;
+  assigneeUserId: string | null;
+  assigneeUsername: string | null;
+  assigneeNameRaw: string | null;
+  dueDateUtc: string | null;
+  status: ActionItemStatus;
+  isOverdue: boolean;
+  isAssignedToMe: boolean;
+  completedUtc: string | null;
+}
+
+export interface ProfileDto {
+  userId: string;
+  username: string;
+  email: string;
+  displayName: string;
+}
+
+export interface UpdateProfileRequestDto {
+  displayName: string;
+}
+
+export interface ChangePasswordRequestDto {
+  currentPassword: string;
+  newPassword: string;
+}
+
 export interface AccountAnalyticsDto {
   totalMeetingHours: number;
   meetingCount: number;
