@@ -204,15 +204,65 @@
                     {{ savingEmail() ? 'Saving...' : 'Save' }}
                   </button>
                   <button type="button" class="secondary" (click)="cancelEditingEmail()">Cancel</button>
-                  <!-- Sending is Phase 9; the draft is review/edit-only for now. -->
-                  <button type="button" disabled title="Sending arrives in a later phase">Send</button>
                 </div>
               } @else {
+                @if (email()?.status === 'Sent') {
+                  <p class="sent-badge">
+                    Sent {{ email()?.sentUtc | date:'medium' }} — this email can no longer be edited.
+                  </p>
+                }
+
                 <p class="email-subject"><strong>Subject:</strong> {{ email()?.subject }}</p>
                 <pre class="email-body">{{ email()?.bodyMarkdown }}</pre>
-                <div class="button-row">
-                  <button type="button" disabled title="Sending arrives in a later phase">Send</button>
-                </div>
+
+                @if (confirmingSend()) {
+                  <!-- Confirmation step: the host sees exactly who is about to be emailed. -->
+                  <div class="confirm-send" role="group" aria-label="Confirm recipients">
+                    @if (recipients(); as r) {
+                      @if (!r.canSend) {
+                        <p class="muted">
+                          No email transport is configured on the server, so this cannot be sent yet.
+                        </p>
+                        <div class="button-row">
+                          <button type="button" class="secondary" (click)="cancelSend()">Close</button>
+                        </div>
+                      } @else if (!r.recipients.length) {
+                        <p class="muted">
+                          There is nobody to send to — everyone has opted out or has no email address.
+                        </p>
+                        <div class="button-row">
+                          <button type="button" class="secondary" (click)="cancelSend()">Close</button>
+                        </div>
+                      } @else {
+                        <p class="confirm-title">
+                          Send to {{ r.recipients.length }} recipient(s)?
+                        </p>
+                        <ul class="recipient-list">
+                          @for (person of r.recipients; track person.userId) {
+                            <li>{{ person.displayName }} &lt;{{ person.email }}&gt;</li>
+                          }
+                        </ul>
+                        @if (r.optedOutCount > 0) {
+                          <p class="hint-small">
+                            {{ r.optedOutCount }} participant(s) excluded because they opted out.
+                          </p>
+                        }
+                        <div class="button-row">
+                          <button type="button" class="primary" (click)="confirmSend()" [disabled]="sending()">
+                            {{ sending() ? 'Sending…' : 'Confirm and send' }}
+                          </button>
+                          <button type="button" class="secondary" (click)="cancelSend()">Cancel</button>
+                        </div>
+                      }
+                    }
+                  </div>
+                } @else if (email()?.status !== 'Sent' && m.isHost) {
+                  <div class="button-row">
+                    <button type="button" class="primary" (click)="openSendConfirmation()">
+                      Send to all participants
+                    </button>
+                  </div>
+                }
               }
             }
           }

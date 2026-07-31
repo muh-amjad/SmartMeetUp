@@ -16,6 +16,7 @@ import {
   ActionItemDto,
   DecisionDto,
   FollowUpEmailDto,
+  FollowUpRecipientsDto,
   MeetingAnalyticsDto,
   MeetingSummaryDto,
 } from '../../dtos/meetings/analysis.dto';
@@ -81,6 +82,11 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
   readonly editingTitle = signal(false);
   readonly titleDraft = signal('');
   readonly savingTitle = signal(false);
+
+  // ── Sending the follow-up ─────────────────────────
+  readonly recipients = signal<FollowUpRecipientsDto | null>(null);
+  readonly confirmingSend = signal(false);
+  readonly sending = signal(false);
 
   readonly retryingTranscript = signal(false);
   readonly retryingAnalysis = signal(false);
@@ -372,6 +378,44 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
       this.toast.error('Could not rename the meeting.');
     } finally {
       this.savingTitle.set(false);
+    }
+  }
+
+  /** Loads the recipient list, then shows the confirmation step. Nothing is sent yet. */
+  async openSendConfirmation(): Promise<void> {
+    try {
+      this.recipients.set(
+        await firstValueFrom(this.meetingApi.getFollowUpRecipients(this.meetingId)),
+      );
+      this.confirmingSend.set(true);
+    } catch {
+      this.toast.error('Could not work out who this would go to.');
+    }
+  }
+
+  cancelSend(): void {
+    this.confirmingSend.set(false);
+  }
+
+  async confirmSend(): Promise<void> {
+    if (this.sending()) {
+      return;
+    }
+    this.sending.set(true);
+
+    try {
+      await firstValueFrom(this.meetingApi.sendFollowUpEmail(this.meetingId));
+
+      // Reflect the terminal state locally so the tab locks without a reload.
+      this.email.update((e) =>
+        e ? { ...e, status: 'Sent', sentUtc: new Date().toISOString() } : e,
+      );
+      this.confirmingSend.set(false);
+      this.toast.success('Follow-up email sent.');
+    } catch {
+      this.toast.error('Could not send the follow-up email. Nothing was delivered.');
+    } finally {
+      this.sending.set(false);
     }
   }
 

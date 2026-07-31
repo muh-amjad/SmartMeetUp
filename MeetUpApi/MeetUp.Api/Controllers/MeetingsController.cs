@@ -8,6 +8,7 @@ using MeetUp.Api.Options;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
 using MeetUp.Api.Services.Ai;
+using MeetUp.Api.Services.Email;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -29,6 +30,7 @@ public class MeetingsController : ControllerBase
     private readonly ILiveKitService _liveKitService;
     private readonly IBlobStorageService _blobStorageService;
     private readonly AnalysisProviderRegistry _providerRegistry;
+    private readonly IEmailService _emailService;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly LiveKitOptions _liveKitOptions;
     private readonly ILogger<MeetingsController> _logger;
@@ -43,6 +45,7 @@ public class MeetingsController : ControllerBase
     ILiveKitService liveKitService,
     IBlobStorageService blobStorageService,
     AnalysisProviderRegistry providerRegistry,
+    IEmailService emailService,
     UserManager<ApplicationUser> userManager,
     IOptions<LiveKitOptions> liveKitOptions,
     ILogger<MeetingsController> logger)
@@ -57,6 +60,7 @@ public class MeetingsController : ControllerBase
         _liveKitService = liveKitService;
         _blobStorageService = blobStorageService;
         _providerRegistry = providerRegistry;
+        _emailService = emailService;
         _liveKitOptions = liveKitOptions.Value;
         _logger = logger;
     }
@@ -618,6 +622,142 @@ public class MeetingsController : ControllerBase
 
         _logger.LogInformation("User {UserId} re-enqueued analytics for meeting {MeetingId}", userId, meeting.Id);
         return Accepted();
+    }
+
+    /// <summary>
+    /// Who the follow-up email would reach. Lets the host confirm the list before sending, and
+    /// reports whether the server can send at all.
+    /// </summary>
+    [HttpGet("{id:guid}/follow-up-email/recipients")]
+    public async Task<ActionResult<FollowUpRecipientsDto>> GetFollowUpRecipients(Guid id, CancellationToken ct)
+    {
+        var meeting = await EnsureCallerCanAccessMeetingAsync(id, ct);
+        var (recipients, optedOut) = await ResolveRecipientsAsync(meeting, ct);
+
+        return Ok(new FollowUpRecipientsDto
+        {
+            Recipients = recipients
+                .Select(r => new FollowUpRecipientDto
+                {
+                    UserId = r.UserId,
+                    Email = r.Email,
+                    DisplayName = r.DisplayName,
+                })
+                .ToList(),
+            OptedOutCount = optedOut,
+            CanSend = _emailService.IsConfigured,
+        });
+    }
+
+    /// <summary>Host-only: sends the drafted follow-up email to everyone who attended.</summary>
+    [HttpPost("{id:guid}/follow-up-email/send")]
+    public async Task<IActionResult> SendFollowUpEmail(Guid id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? throw new ForbiddenException("User id claim missing.");
+
+        var meeting = await _meetingRepository.GetByIdAsync(id, ct)
+            ?? throw new NotFoundException($"Meeting {id} not found.");
+
+        if (!string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal))
+        {
+            throw new ForbiddenException("Only the host can send the follow-up email.");
+        }
+
+        if (!_emailService.IsConfigured)
+        {
+            throw new ConflictException(
+                "No email transport is configured on the server, so the follow-up cannot be sent.");
+        }
+
+        var email = await _analysisRepository.GetFollowUpEmailAsync(id, ct)
+            ?? throw new NotFoundException("No follow-up email has been drafted for this meeting.");
+
+        // Sending twice would spam everyone, so Sent is a terminal state.
+        if (email.Status == FollowUpEmailStatus.Sent)
+        {
+            throw new ConflictException($"This email was already sent on {email.SentUtc:u}.");
+        }
+
+        var (recipients, _) = await ResolveRecipientsAsync(meeting, ct);
+        if (recipients.Count == 0)
+        {
+            throw new ConflictException(
+                "There is nobody to send to — every participant has opted out or has no email address.");
+        }
+
+        var html = FollowUpEmailRenderer.Render(email.Subject, email.BodyMarkdown, meeting.Title);
+
+        // Send first: if the provider rejects it, the draft must stay sendable rather than being
+        // marked Sent with nothing delivered.
+        await _emailService.SendAsync(
+            recipients.Select(r => r.Email).ToList(), email.Subject, html, ct);
+
+        var sentAt = DateTime.UtcNow;
+        email.Status = FollowUpEmailStatus.Sent;
+        email.SentUtc = sentAt;
+
+        await _analysisRepository.AddFollowUpRecipientsAsync(
+            recipients.Select(r => new FollowUpEmailRecipient
+            {
+                Id = Guid.NewGuid(),
+                FollowUpEmailId = email.Id,
+                RecipientEmail = r.Email,
+                RecipientUserId = r.UserId,
+                SentAtUtc = sentAt,
+            }),
+            ct);
+
+        await _analysisRepository.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Follow-up email for meeting {MeetingId} sent to {RecipientCount} recipient(s) via {Transport}",
+            meeting.Id, recipients.Count, _emailService.TransportName);
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Everyone who attended, plus the host, minus opt-outs and anyone without an address.
+    /// Deduplicated by email so one person listed twice is only mailed once.
+    /// </summary>
+    private async Task<(List<(string UserId, string Email, string DisplayName)> Recipients, int OptedOut)>
+        ResolveRecipientsAsync(Meeting meeting, CancellationToken ct)
+    {
+        var participants = await _participantRepository.GetByMeetingAsync(meeting.Id, ct);
+
+        var candidates = participants
+            .Select(p => p.User)
+            .Where(u => u is not null)
+            .ToList();
+
+        // The host counts as a recipient even if no participant row was ever written for them
+        // (for example a meeting that ended before anyone else joined).
+        if (candidates.All(u => u!.Id != meeting.HostUserId))
+        {
+            var host = await _userManager.FindByIdAsync(meeting.HostUserId);
+            if (host is not null)
+            {
+                candidates.Add(host);
+            }
+        }
+
+        var optedOut = candidates.Count(u => u!.OptOutFollowUpEmails);
+
+        var recipients = candidates
+            .Where(u => !u!.OptOutFollowUpEmails && !string.IsNullOrWhiteSpace(u.Email))
+            .GroupBy(u => u!.Email!, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var user = group.First()!;
+                return (
+                    UserId: user.Id,
+                    Email: user.Email!,
+                    DisplayName: user.DisplayName is { Length: > 0 } name ? name : user.UserName ?? user.Email!);
+            })
+            .ToList();
+
+        return (recipients, optedOut);
     }
 
     /// <summary>

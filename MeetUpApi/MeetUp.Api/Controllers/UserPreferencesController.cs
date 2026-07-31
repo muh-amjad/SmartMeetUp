@@ -227,6 +227,7 @@ public class UserPreferencesController : ControllerBase
         return Ok(new UserPreferencesDto
         {
             PreferredAnalysisProviderKey = user.PreferredAnalysisProviderKey,
+            OptOutFollowUpEmails = user.OptOutFollowUpEmails,
         });
     }
 
@@ -251,6 +252,12 @@ public class UserPreferencesController : ControllerBase
             throw new Infrastructure.Exceptions.ValidationException(
                 nameof(request.PreferredAnalysisProviderKey),
                 [$"'{requestedKey}' is not an available AI provider."]);
+        }
+
+        // Omitted entirely means "leave as is", so only assign when the caller sent a value.
+        if (request.OptOutFollowUpEmails.HasValue)
+        {
+            user.OptOutFollowUpEmails = request.OptOutFollowUpEmails.Value;
         }
 
         await _userManager.UpdateAsync(user);

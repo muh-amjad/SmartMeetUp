@@ -8,5 +8,8 @@ namespace MeetUp.Api.Entities
 
         /// <summary>Preferred AI analysis provider key; null falls back to the system default.</summary>
         public string? PreferredAnalysisProviderKey { get; set; }
+
+        /// <summary>When true, this user is excluded from follow-up emails for meetings they attend.</summary>
+        public bool OptOutFollowUpEmails { get; set; }
     }
 }

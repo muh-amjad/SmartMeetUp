@@ -17,6 +17,7 @@ namespace MeetUp.Api.Data
         public DbSet<ActionItem> ActionItems => Set<ActionItem>();
         public DbSet<Decision> Decisions => Set<Decision>();
         public DbSet<FollowUpEmail> FollowUpEmails => Set<FollowUpEmail>();
+        public DbSet<FollowUpEmailRecipient> FollowUpEmailRecipients => Set<FollowUpEmailRecipient>();
         public DbSet<ParticipantAudioActivity> ParticipantAudioActivities => Set<ParticipantAudioActivity>();
         public DbSet<MeetingAnalytics> MeetingAnalytics => Set<MeetingAnalytics>();
 
@@ -299,6 +300,28 @@ namespace MeetUp.Api.Data
                 entity.HasOne(e => e.EditedBy)
                     .WithMany()
                     .HasForeignKey(e => e.EditedByUserId)
+                    .OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<FollowUpEmailRecipient>(entity =>
+            {
+                entity.HasKey(r => r.Id);
+
+                entity.Property(r => r.RecipientEmail)
+                    .HasMaxLength(256)
+                    .IsRequired();
+
+                entity.HasIndex(r => r.FollowUpEmailId);
+
+                entity.HasOne(r => r.FollowUpEmail)
+                    .WithMany()
+                    .HasForeignKey(r => r.FollowUpEmailId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                // The audit row outlives the account: clearing the link keeps the address on record.
+                entity.HasOne(r => r.RecipientUser)
+                    .WithMany()
+                    .HasForeignKey(r => r.RecipientUserId)
                     .OnDelete(DeleteBehavior.SetNull);
             });
 

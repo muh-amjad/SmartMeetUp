@@ -60,6 +60,21 @@ export interface AnalysisProviderDto {
 
 export interface UserPreferencesDto {
   preferredAnalysisProviderKey: string | null;
+  /** Omitted on a PATCH means "leave unchanged". */
+  optOutFollowUpEmails?: boolean | null;
+}
+
+export interface FollowUpRecipientDto {
+  userId: string;
+  email: string;
+  displayName: string;
+}
+
+export interface FollowUpRecipientsDto {
+  recipients: FollowUpRecipientDto[];
+  optedOutCount: number;
+  /** False when the server has no email transport configured. */
+  canSend: boolean;
 }
 
 export interface SpeakingShareDto {

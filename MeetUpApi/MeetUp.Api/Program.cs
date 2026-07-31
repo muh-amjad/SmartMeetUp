@@ -7,6 +7,7 @@ using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
 using MeetUp.Api.Services.Ai;
 using MeetUp.Api.Services.AssemblyAi;
+using MeetUp.Api.Services.Email;
 using MeetUp.Api.Services.Search;
 using MeetUp.Api.Infrastructure.Middleware;
 using MeetUp.Api.Infrastructure.Logging;
@@ -52,6 +53,7 @@ namespace MeetUp.Api
             builder.Services.Configure<AdminBootstrapOptions>(builder.Configuration.GetSection(AdminBootstrapOptions.SectionName));
             builder.Services.Configure<AssemblyAiOptions>(builder.Configuration.GetSection(AssemblyAiOptions.SectionName));
             builder.Services.Configure<AiProvidersOptions>(builder.Configuration.GetSection(AiProvidersOptions.SectionName));
+            builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection(EmailOptions.SectionName));
 
             // UseVector is what maps pgvector's Vector type; without it every read or write of an
             // embedding column throws at runtime even though the model and migration look fine.
@@ -91,6 +93,28 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IAiAnalysisJob, AiAnalysisJob>();
             builder.Services.AddScoped<ISpeakerMappingJob, SpeakerMappingJob>();
             builder.Services.AddScoped<IEmbeddingJob, EmbeddingJob>();
+
+            // Pick the email transport from what is actually configured: a real provider if there is
+            // an API key, a local catcher if there is an SMTP host, otherwise a stub that reports
+            // itself unconfigured so the send endpoint can refuse with a clear message.
+            var emailOptions = builder.Configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>()
+                ?? new EmailOptions();
+
+            if (!string.IsNullOrWhiteSpace(emailOptions.Resend.ApiKey))
+            {
+                builder.Services.AddHttpClient<IEmailService, ResendEmailService>(client =>
+                {
+                    client.Timeout = TimeSpan.FromSeconds(30);
+                });
+            }
+            else if (!string.IsNullOrWhiteSpace(emailOptions.Smtp.Host))
+            {
+                builder.Services.AddScoped<IEmailService, SmtpEmailService>();
+            }
+            else
+            {
+                builder.Services.AddSingleton<IEmailService, UnconfiguredEmailService>();
+            }
             builder.Services.AddScoped<ISearchService, HybridSearchService>();
             builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>(client =>
             {

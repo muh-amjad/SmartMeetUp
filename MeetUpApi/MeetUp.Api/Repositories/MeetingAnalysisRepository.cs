@@ -53,6 +53,10 @@ public sealed class MeetingAnalysisRepository : IMeetingAnalysisRepository
     public Task<FollowUpEmail?> GetFollowUpEmailAsync(Guid meetingId, CancellationToken ct) =>
         _dbContext.FollowUpEmails.FirstOrDefaultAsync(e => e.MeetingId == meetingId, ct);
 
+    public async Task AddFollowUpRecipientsAsync(
+        IEnumerable<FollowUpEmailRecipient> recipients, CancellationToken ct) =>
+        await _dbContext.FollowUpEmailRecipients.AddRangeAsync(recipients, ct);
+
     public async Task ClearAnalysisAsync(Guid meetingId, CancellationToken ct)
     {
         var summaries = await _dbContext.MeetingSummaries.Where(s => s.MeetingId == meetingId).ToListAsync(ct);

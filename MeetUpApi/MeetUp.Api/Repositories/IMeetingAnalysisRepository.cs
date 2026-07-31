@@ -25,6 +25,9 @@ public interface IMeetingAnalysisRepository
 
     Task<FollowUpEmail?> GetFollowUpEmailAsync(Guid meetingId, CancellationToken ct);
 
+    /// <summary>Records who a follow-up email went to, as an audit trail.</summary>
+    Task AddFollowUpRecipientsAsync(IEnumerable<FollowUpEmailRecipient> recipients, CancellationToken ct);
+
     /// <summary>Removes any previous analysis for the meeting so a re-run replaces rather than duplicates.</summary>
     Task ClearAnalysisAsync(Guid meetingId, CancellationToken ct);
 

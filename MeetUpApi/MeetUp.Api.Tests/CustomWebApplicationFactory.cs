@@ -1,5 +1,6 @@
 using MeetUp.Api.Data;
 using MeetUp.Api;
+using MeetUp.Api.Services.Email;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -13,6 +14,9 @@ namespace MeetUp.Api.Tests;
 public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     private PostgreSqlContainer _postgres = null!;
+
+    /// <summary>Email transport used by the test host; tests assert against what it captured.</summary>
+    public RecordingEmailService Email { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -61,6 +65,10 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
             {
                 options.UseNpgsql(_postgres.GetConnectionString(), npgsql => npgsql.UseVector());
             });
+
+            // Swap the real transport for one that records instead of delivering.
+            services.RemoveAll(typeof(IEmailService));
+            services.AddSingleton<IEmailService>(Email);
 
             var serviceProvider = services.BuildServiceProvider();
             using var scope = serviceProvider.CreateScope();

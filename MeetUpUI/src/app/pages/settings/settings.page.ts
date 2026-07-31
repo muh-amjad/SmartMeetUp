@@ -34,6 +34,10 @@ export class SettingsPage implements OnInit {
   readonly displayName = signal('');
   readonly savingProfile = signal(false);
 
+  // ── Notifications ─────────────────────────────────
+  readonly optOutFollowUpEmails = signal(false);
+  readonly savingNotifications = signal(false);
+
   readonly currentPassword = signal('');
   readonly newPassword = signal('');
   readonly confirmPassword = signal('');
@@ -50,6 +54,7 @@ export class SettingsPage implements OnInit {
       ]);
       this.providers.set(providers);
       this.selectedProviderKey.set(preferences.preferredAnalysisProviderKey ?? USE_DEFAULT);
+      this.optOutFollowUpEmails.set(preferences.optOutFollowUpEmails ?? false);
       this.username.set(profile.username);
       this.email.set(profile.email);
       this.displayName.set(profile.displayName);
@@ -108,6 +113,32 @@ export class SettingsPage implements OnInit {
       );
     } finally {
       this.savingPassword.set(false);
+    }
+  }
+
+  /**
+   * Saves immediately on toggle — a single checkbox with its own Save button is more friction than
+   * the setting is worth. The UI is reverted if the request fails so it never lies about the state.
+   */
+  async toggleFollowUpEmails(optOut: boolean): Promise<void> {
+    const previous = this.optOutFollowUpEmails();
+    this.optOutFollowUpEmails.set(optOut);
+    this.savingNotifications.set(true);
+
+    try {
+      await firstValueFrom(
+        this.aiProviders.savePreferences({
+          preferredAnalysisProviderKey:
+            this.selectedProviderKey() === USE_DEFAULT ? null : this.selectedProviderKey(),
+          optOutFollowUpEmails: optOut,
+        }),
+      );
+      this.toast.success(optOut ? 'Follow-up emails turned off.' : 'Follow-up emails turned on.');
+    } catch {
+      this.optOutFollowUpEmails.set(previous);
+      this.toast.error('Could not save that preference.');
+    } finally {
+      this.savingNotifications.set(false);
     }
   }
 

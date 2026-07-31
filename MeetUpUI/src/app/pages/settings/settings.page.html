@@ -126,5 +126,24 @@
         </button>
       }
     </section>
+
+    <section class="panel">
+      <h2>Notifications</h2>
+
+      <label class="toggle-row">
+        <input
+          type="checkbox"
+          [checked]="!optOutFollowUpEmails()"
+          [disabled]="savingNotifications()"
+          (change)="toggleFollowUpEmails(!$any($event.target).checked)" />
+        <span>
+          <strong>Receive follow-up emails</strong>
+          <small>
+            When a host sends the recap for a meeting you attended, it comes to your inbox. Turning
+            this off excludes you from every meeting's follow-up.
+          </small>
+        </span>
+      </label>
+    </section>
   }
 </div>

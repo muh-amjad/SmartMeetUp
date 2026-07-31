@@ -6,6 +6,7 @@ import {
   ActionItemDto,
   DecisionDto,
   FollowUpEmailDto,
+  FollowUpRecipientsDto,
   MeetingAnalyticsDto,
   MeetingSummaryDto,
   UpdateActionItemRequestDto,
@@ -110,6 +111,18 @@ export class MeetingApiService {
     payload: UpdateFollowUpEmailRequestDto,
   ): Observable<void> {
     return this.http.put<void>(`${this.baseUrl}/${meetingId}/follow-up-email`, payload);
+  }
+
+  /** Who the follow-up would go to, plus whether the server can send at all. */
+  getFollowUpRecipients(meetingId: string): Observable<FollowUpRecipientsDto> {
+    return this.http.get<FollowUpRecipientsDto>(
+      `${this.baseUrl}/${meetingId}/follow-up-email/recipients`,
+    );
+  }
+
+  /** Host-only: send the drafted follow-up email to everyone who attended. */
+  sendFollowUpEmail(meetingId: string): Observable<void> {
+    return this.http.post<void>(`${this.baseUrl}/${meetingId}/follow-up-email/send`, {});
   }
 
   /** Host-only: re-run AI analysis over an existing transcript. */

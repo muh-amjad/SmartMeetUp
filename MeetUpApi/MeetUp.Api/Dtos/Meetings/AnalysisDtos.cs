@@ -58,6 +58,25 @@ public sealed class UpdateFollowUpEmailRequestDto
     public string BodyMarkdown { get; set; } = string.Empty;
 }
 
+/// <summary>Who a follow-up email would go to, so the host can confirm before sending.</summary>
+public sealed class FollowUpRecipientsDto
+{
+    public IReadOnlyList<FollowUpRecipientDto> Recipients { get; set; } = Array.Empty<FollowUpRecipientDto>();
+
+    /// <summary>Participants excluded because they opted out of follow-up emails.</summary>
+    public int OptedOutCount { get; set; }
+
+    /// <summary>False when the server has no email transport configured; sending will refuse.</summary>
+    public bool CanSend { get; set; }
+}
+
+public sealed class FollowUpRecipientDto
+{
+    public string UserId { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+}
+
 public sealed class AnalysisProviderDto
 {
     public string Key { get; set; } = string.Empty;
@@ -70,6 +89,9 @@ public sealed class AnalysisProviderDto
 public sealed class UserPreferencesDto
 {
     public string? PreferredAnalysisProviderKey { get; set; }
+
+    /// <summary>Null on a PATCH means "leave unchanged", so the flag is nullable on the wire.</summary>
+    public bool? OptOutFollowUpEmails { get; set; }
 }
 
 /// <summary>An action item plus the meeting it came from, for the cross-meeting list.</summary>
