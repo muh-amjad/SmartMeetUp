@@ -94,3 +94,8 @@ desktop.ini
 *.key
 *.pem
 /MeetUpUI/ssl/
+
+# Deployment secrets. Only .env.example, which holds empty placeholders, is tracked.
+.env
+.env.*
+!.env.example

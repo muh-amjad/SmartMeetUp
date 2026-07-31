@@ -22,4 +22,11 @@ public sealed class BlobStorageOptions
 
     // Required for MinIO (bucket-in-path instead of bucket-as-subdomain)
     public bool ForcePathStyle { get; set; } = true;
+
+    /// <summary>
+    /// Days before a recording is deleted automatically. Recordings are the only personal data the
+    /// demo stores in bulk, and the free tier has finite disk, so they expire rather than accumulate.
+    /// Zero disables the rule.
+    /// </summary>
+    public int RetentionDays { get; set; } = 30;
 }

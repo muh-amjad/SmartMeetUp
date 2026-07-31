@@ -1,0 +1,217 @@
+# Production stack for the single-VM demo. Every value that differs between deployments comes from
+# deploy/.env, which is never committed — see .env.example for the required keys.
+#
+# Run from the repository root:
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+
+name: smartmeetup
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: smartmeetup-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"       # HTTP-01 challenge; must stay open or certificates cannot renew
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data      # issued certificates — losing this means re-issuing on every restart
+      - caddy-config:/config
+    depends_on:
+      - web
+      - api
+
+  web:
+    build:
+      context: ../MeetUpUI
+      dockerfile: Dockerfile
+    container_name: smartmeetup-web
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  api:
+    build:
+      context: ..
+      dockerfile: MeetUpApi/MeetUp.Api/Dockerfile
+    container_name: smartmeetup-api
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+
+      ConnectionStrings__DefaultConnection: >-
+        Host=postgres;Port=5432;Database=smartmeetupdb;Username=postgres;Password=${POSTGRES_PASSWORD}
+
+      Jwt__Key: ${JWT_KEY}
+      Jwt__Issuer: https://${DOMAIN}
+      Jwt__Audience: https://${DOMAIN}
+      Jwt__ExpiresMinutes: "180"
+
+      # Single site origin. Caddy serves the app and the API from the same hostname, so this is the
+      # only origin that ever needs to be allowed.
+      Security__AllowedOrigins__0: https://${DOMAIN}
+      Security__EnableHsts: "true"
+      Security__RateLimits__Enabled: "true"
+
+      LiveKit__ApiKey: ${LIVEKIT_API_KEY}
+      LiveKit__ApiSecret: ${LIVEKIT_API_SECRET}
+      # Browsers reach LiveKit through Caddy over TLS; the API talks to it directly on the network.
+      LiveKit__WsUrl: wss://${DOMAIN}/livekit
+      LiveKit__HttpUrl: http://livekit:7880
+
+      # ServiceUrl is what this container uses; EgressServiceUrl is what the egress worker uses.
+      # Both are in-network here, but they are separate keys because they differ in development.
+      BlobStorage__ServiceUrl: http://minio:9000
+      BlobStorage__EgressServiceUrl: http://minio:9000
+      BlobStorage__AccessKey: ${MINIO_ROOT_USER}
+      BlobStorage__SecretKey: ${MINIO_ROOT_PASSWORD}
+      BlobStorage__BucketName: ${S3_BUCKET}
+      BlobStorage__ForcePathStyle: "true"
+      BlobStorage__RetentionDays: "30"
+
+      AssemblyAi__ApiKey: ${ASSEMBLYAI_API_KEY}
+
+      AiProviders__Default: gemini-2.5-flash
+      AiProviders__Providers__gemini-2.5-flash__ApiKey: ${GEMINI_API_KEY}
+      AiProviders__Providers__groq-llama-3.3-70b__ApiKey: ${GROQ_API_KEY}
+      AiProviders__Providers__openrouter-deepseek-v3__ApiKey: ${OPENROUTER_API_KEY}
+      AiProviders__Providers__openai-gpt-4o-mini__ApiKey: ${OPENAI_API_KEY}
+
+      Email__FromEmail: ${EMAIL_FROM}
+      Email__FromName: SmartMeetUp
+      Email__Resend__ApiKey: ${RESEND_API_KEY}
+
+      Serilog__WriteTo__0__Name: Console
+      Serilog__WriteTo__1__Name: Seq
+      Serilog__WriteTo__1__Args__serverUrl: http://seq:5341
+
+      AdminBootstrap__Emails__0: ${ADMIN_EMAIL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: smartmeetup-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: smartmeetupdb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published: only sibling containers need it. Reaching it from outside goes through SSH.
+    expose:
+      - "5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: smartmeetup-redis
+    restart: unless-stopped
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  livekit:
+    image: livekit/livekit-server:v1.8.4
+    container_name: smartmeetup-livekit
+    restart: unless-stopped
+    command: --config /livekit.yaml
+    environment:
+      # Quoted because the value itself contains a colon — "key: secret" is LiveKit's expected
+      # format, but unquoted YAML would read it as a nested mapping.
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./livekit.prod.yaml:/livekit.yaml:ro
+    # WebRTC media cannot traverse an HTTPS reverse proxy, so these are published straight on the
+    # host. The signalling WebSocket does go through Caddy, on /livekit.
+    ports:
+      - "7881:7881/udp"
+      - "7882:7882/udp"
+      - "5349:5349/tcp"   # TURN over TCP, for viewers behind symmetric NAT
+    expose:
+      - "7880"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  livekit-egress:
+    image: livekit/egress:latest
+    container_name: smartmeetup-egress
+    restart: unless-stopped
+    environment:
+      EGRESS_CONFIG_FILE: /out/egress.yaml
+    volumes:
+      - ./livekit-egress.prod.yaml:/out/egress.yaml:ro
+    # Room-composite recording renders through a headless browser, which needs this capability.
+    cap_add:
+      - CAP_SYS_ADMIN
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+      minio:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    container_name: smartmeetup-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    expose:
+      - "9000"
+      - "9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  seq:
+    # 2025.1 rather than 2024.4: that tag does not exist on Docker Hub, so a deploy would fail on
+    # pull. Pinned to a real release (arm64 and amd64 both published) instead of :latest.
+    image: datalust/seq:2025.1
+    container_name: smartmeetup-seq
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      # Seq's own login, since Caddy exposes it at /logs on the public hostname.
+      SEQ_FIRSTRUN_ADMINPASSWORDHASH: ${SEQ_ADMIN_PASSWORD_HASH}
+    volumes:
+      - seq-data:/data
+    expose:
+      - "80"
+      - "5341"
+
+volumes:
+  postgres-data:
+  minio-data:
+  seq-data:
+  caddy-data:
+  caddy-config:

@@ -78,17 +78,67 @@ public sealed class S3BlobStorageService : IBlobStorageService
     public async Task EnsureBucketExistsAsync(CancellationToken ct)
     {
         var exists = await AmazonS3Util.DoesS3BucketExistV2Async(_client, _options.BucketName);
-        if (exists)
+
+        if (!exists)
+        {
+            await _client.PutBucketAsync(new PutBucketRequest
+            {
+                BucketName = _options.BucketName,
+                UseClientRegion = true,
+            }, ct);
+
+            _logger.LogInformation("Created blob storage bucket {Bucket}", _options.BucketName);
+        }
+
+        // Applied on every startup, not only at creation: an existing bucket from before retention
+        // was configured — or one whose rule was changed by hand — still ends up correct.
+        await ApplyRetentionPolicyAsync(ct);
+    }
+
+    /// <summary>
+    /// Expires recordings after the configured number of days. The store enforces this itself, so
+    /// deletion keeps happening even if the app is down.
+    /// </summary>
+    private async Task ApplyRetentionPolicyAsync(CancellationToken ct)
+    {
+        if (_options.RetentionDays <= 0)
         {
             return;
         }
 
-        await _client.PutBucketAsync(new PutBucketRequest
+        try
         {
-            BucketName = _options.BucketName,
-            UseClientRegion = true,
-        }, ct);
+            await _client.PutLifecycleConfigurationAsync(new PutLifecycleConfigurationRequest
+            {
+                BucketName = _options.BucketName,
+                Configuration = new LifecycleConfiguration
+                {
+                    Rules =
+                    [
+                        new LifecycleRule
+                        {
+                            Id = "expire-recordings",
+                            Status = LifecycleRuleStatus.Enabled,
+                            Filter = new LifecycleFilter
+                            {
+                                LifecycleFilterPredicate = new LifecyclePrefixPredicate { Prefix = "recordings/" },
+                            },
+                            Expiration = new LifecycleRuleExpiration { Days = _options.RetentionDays },
+                        },
+                    ],
+                },
+            }, ct);
 
-        _logger.LogInformation("Created blob storage bucket {Bucket}", _options.BucketName);
+            _logger.LogInformation(
+                "Recording retention set to {Days} day(s) on bucket {Bucket}",
+                _options.RetentionDays, _options.BucketName);
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: recordings simply accumulate until this is fixed, which must not stop the
+            // app from serving.
+            _logger.LogWarning(ex,
+                "Could not apply the retention policy to bucket {Bucket}", _options.BucketName);
+        }
     }
 }

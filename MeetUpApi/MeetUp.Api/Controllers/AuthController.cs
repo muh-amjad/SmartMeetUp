@@ -1,14 +1,18 @@
 using MeetUp.Api.Dtos.Auth;
 using MeetUp.Api.Entities;
+using MeetUp.Api.Infrastructure;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace MeetUp.Api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    // Per-IP: these run before sign-in, and they are the endpoints worth brute-forcing.
+    [EnableRateLimiting(RateLimitPolicies.Auth)]
     public class AuthController : ControllerBase
     {
         private readonly UserManager<ApplicationUser> _userManager;

@@ -9,8 +9,11 @@ using MeetUp.Api.Services.Ai;
 using MeetUp.Api.Services.AssemblyAi;
 using MeetUp.Api.Services.Email;
 using MeetUp.Api.Services.Search;
+using MeetUp.Api.Infrastructure;
 using MeetUp.Api.Infrastructure.Middleware;
 using MeetUp.Api.Infrastructure.Logging;
+using Microsoft.AspNetCore.Cors.Infrastructure;
+using Microsoft.AspNetCore.HttpOverrides;
 using FluentValidation;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -245,23 +248,49 @@ namespace MeetUp.Api
                 });
             });
 
-            builder.Services.AddCors(options =>
+            builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
+
+            builder.Services.AddCors();
+
+            // Configured through the options system rather than inside AddCors so the allow-list is
+            // read once every configuration source is in place. Reading it during service
+            // registration would miss anything layered in later and silently fall back to defaults.
+            builder.Services.AddOptions<CorsOptions>()
+                .Configure<IOptionsMonitor<SecurityOptions>>((cors, security) =>
+                {
+                    cors.AddPolicy("AllowAngular", policy => policy
+                        // Credentials are allowed, so a wildcard origin is not an option here.
+                        .WithOrigins(security.CurrentValue.AllowedOrigins)
+                        .AllowAnyHeader()
+                        .AllowAnyMethod()
+                        .AllowCredentials());
+                });
+
+            builder.Services.AddRateLimiter(RateLimitPolicies.AddPolicies);
+
+            // Behind Caddy the app sees the proxy's address and scheme unless it is told to read the
+            // forwarded headers — without this, rate-limit partitions collapse onto one IP and any
+            // generated URL comes out as http.
+            builder.Services.Configure<ForwardedHeadersOptions>(options =>
             {
-                options.AddPolicy("AllowAngular",
-                    policy =>
-                    {
-                        policy.WithOrigins("http://localhost:4200")
-                            .AllowAnyHeader()
-                            .AllowAnyMethod()
-                            .AllowCredentials();
-                    });
+                options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+
+                // The proxy is a sibling container on an internal network, not a known static IP.
+                options.KnownNetworks.Clear();
+                options.KnownProxies.Clear();
             });
 
             builder.Services.AddSignalR();
 
             var app = builder.Build();
 
+            // Must run before anything that reads the client address or scheme.
+            app.UseForwardedHeaders();
+
             app.UseExceptionHandler();
+
+            // Early enough that even error and rate-limited responses carry the headers.
+            app.UseMiddleware<SecurityHeadersMiddleware>();
 
             app.UseCors("AllowAngular");
 
@@ -281,6 +310,10 @@ namespace MeetUp.Api
 
             app.UseAuthentication();
             app.UseAuthorization();
+
+            // After authentication, so per-user partitions can actually see the user. Always in the
+            // pipeline — the policies themselves become no-ops when limiting is switched off.
+            app.UseRateLimiter();
 
             app.MapControllers();
             app.MapHub<Hubs.MeetingHub>("/meetingHub");

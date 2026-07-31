@@ -2,6 +2,7 @@
 using Hangfire;
 using MeetUp.Api.Dtos.Meetings;
 using MeetUp.Api.Entities;
+using MeetUp.Api.Infrastructure;
 using MeetUp.Api.Infrastructure.Exceptions;
 using MeetUp.Api.Jobs;
 using MeetUp.Api.Options;
@@ -12,6 +13,7 @@ using MeetUp.Api.Services.Email;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 namespace MeetUp.Api.Controllers;
@@ -67,6 +69,9 @@ public class MeetingsController : ControllerBase
 
     /// <summary>Creates a new meeting and returns the host's LiveKit access token.</summary>
     [HttpPost]
+    // A meeting is the entry point to every paid downstream step — recording, transcription,
+    // analysis — so the daily cap here is what actually protects the free-tier quotas.
+    [EnableRateLimiting(RateLimitPolicies.MeetingCreation)]
     public async Task<ActionResult<CreateMeetingResponseDto>> Create(
         [FromBody] CreateMeetingRequestDto? request,
         CancellationToken ct)
@@ -422,6 +427,7 @@ public class MeetingsController : ControllerBase
 
     /// <summary>Host-only: re-enqueues transcription after a failed run.</summary>
     [HttpPost("{id:guid}/transcript/retry")]
+    [EnableRateLimiting(RateLimitPolicies.Expensive)]
     public async Task<IActionResult> RetryTranscript(Guid id, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -549,6 +555,7 @@ public class MeetingsController : ControllerBase
 
     /// <summary>Host-only: re-runs AI analysis. Requires an existing transcript.</summary>
     [HttpPost("{id:guid}/analysis/retry")]
+    [EnableRateLimiting(RateLimitPolicies.Expensive)]
     public async Task<IActionResult> RetryAnalysis(Guid id, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -602,6 +609,7 @@ public class MeetingsController : ControllerBase
 
     /// <summary>Host-only: recompute speaker attribution and analytics for an existing transcript.</summary>
     [HttpPost("{id:guid}/analytics/recompute")]
+    [EnableRateLimiting(RateLimitPolicies.Expensive)]
     public async Task<IActionResult> RecomputeAnalytics(Guid id, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -651,6 +659,7 @@ public class MeetingsController : ControllerBase
 
     /// <summary>Host-only: sends the drafted follow-up email to everyone who attended.</summary>
     [HttpPost("{id:guid}/follow-up-email/send")]
+    [EnableRateLimiting(RateLimitPolicies.Expensive)]
     public async Task<IActionResult> SendFollowUpEmail(Guid id, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -766,6 +775,7 @@ public class MeetingsController : ControllerBase
     /// index or to make a meeting transcribed before search existed searchable.
     /// </summary>
     [HttpPost("{id:guid}/search-index/rebuild")]
+    [EnableRateLimiting(RateLimitPolicies.Expensive)]
     public async Task<IActionResult> RebuildSearchIndex(Guid id, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)

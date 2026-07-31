@@ -1,0 +1,34 @@
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  # The VM has a public address that is not on its own interface, so LiveKit must discover it
+  # rather than advertise the private one — otherwise remote peers get an unreachable candidate.
+  use_external_ip: true
+
+redis:
+  address: redis:6379
+
+# Keys come from the LIVEKIT_KEYS environment variable in docker-compose.prod.yml, so no secret
+# is committed here.
+
+room:
+  auto_create: true
+  empty_timeout: 300
+  max_participants: 50
+
+# Built-in TURN over TCP 5349, for viewers whose network blocks UDP entirely.
+turn:
+  enabled: true
+  tcp_port: 5349
+  # TLS is terminated by Caddy for HTTP; TURN is published directly, so it runs plain TCP here.
+  external_tls: false
+
+webhook:
+  api_key: ${LIVEKIT_API_KEY}
+  urls:
+    - http://api:8080/api/webhooks/livekit
+
+logging:
+  level: info

@@ -1,0 +1,11 @@
+# The egress worker joins rooms as a headless client, records the composite audio, and uploads
+# straight to MinIO. It reaches LiveKit over the internal network, not through Caddy.
+
+api_key: ${LIVEKIT_API_KEY}
+api_secret: ${LIVEKIT_API_SECRET}
+ws_url: ws://livekit:7880
+
+redis:
+  address: redis:6379
+
+log_level: info

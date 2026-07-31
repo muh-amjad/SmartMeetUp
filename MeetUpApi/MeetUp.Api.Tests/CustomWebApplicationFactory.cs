@@ -11,7 +11,9 @@ using Testcontainers.PostgreSql;
 
 namespace MeetUp.Api.Tests;
 
-public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
+// Not sealed: ThrottledWebApplicationFactory derives from this to run one test class against
+// deliberately tiny rate limits without disturbing the rest of the suite.
+public class CustomWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     private PostgreSqlContainer _postgres = null!;
 
@@ -53,6 +55,14 @@ public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>
                 ["BlobStorage:ForcePathStyle"] = "true",
 
                 ["AssemblyAi:ApiKey"] = "test-assemblyai-key",
+
+                // The suite shares one client address, so real per-IP ceilings would throttle the
+                // tests themselves. Raised out of the way here; RateLimitingTests uses its own host
+                // with deliberately tiny limits to prove the limiter actually rejects.
+                ["Security:RateLimits:AuthPerMinute"] = "100000",
+                ["Security:RateLimits:GeneralPerMinute"] = "100000",
+                ["Security:RateLimits:ExpensivePerMinute"] = "100000",
+                ["Security:RateLimits:MeetingsPerDay"] = "100000",
             });
         });
 
