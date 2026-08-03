@@ -1,5 +1,9 @@
 # Deploying SmartMeetUp
 
+> **Pehli baar deploy kar rahe hain?** [`WALKTHROUGH.md`](WALKTHROUGH.md) follow karein — wo
+> step-by-step hai, Oracle console ke clicks se le kar chalte hue app tak, har step pe checkpoint
+> ke saath. Ye file reference runbook hai: architecture, ops aur troubleshooting detail.
+
 Single-VM demo deployment: one Docker Compose stack behind Caddy, which obtains and renews TLS
 certificates automatically. Everything except the AI, transcription and email SaaS runs on the box.
 
