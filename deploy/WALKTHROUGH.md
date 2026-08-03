@@ -122,6 +122,14 @@ Prompt aisa dikhe: `ubuntu@smartmeetup:~$`
 # Step 4 — Bootstrap (Docker + firewall + cron)
 
 ```bash
+# git fresh Ubuntu images pe pehle se nahi hota
+sudo apt-get update -y && sudo apt-get install -y git
+
+# /opt root ka hai, to folder bana kar apne user ko de dein —
+# warna clone "permission denied" degi
+sudo mkdir -p /opt/smartmeetup
+sudo chown ubuntu:ubuntu /opt/smartmeetup
+
 git clone https://github.com/muh-amjad/SmartMeetUp.git /opt/smartmeetup
 cd /opt/smartmeetup/SmartMeetUp
 sudo bash deploy/scripts/provision.sh

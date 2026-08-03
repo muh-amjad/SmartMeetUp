@@ -12,7 +12,7 @@ DEPLOY_USER=${SUDO_USER:-ubuntu}
 
 echo "==> Installing packages"
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg ufw cron
+apt-get install -y ca-certificates curl gnupg ufw cron git
 
 echo "==> Installing Docker from Docker's own repository"
 # Ubuntu's packaged docker.io lags well behind and lacks the compose plugin.
