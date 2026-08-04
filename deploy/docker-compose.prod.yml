@@ -36,8 +36,10 @@ services:
 
   api:
     build:
-      context: ..
-      dockerfile: MeetUpApi/MeetUp.Api/Dockerfile
+      # Context is the solution folder, not the repo root: the Dockerfile is VS-generated and copies
+      # "MeetUp.Api/MeetUp.Api.csproj", a path that only resolves from here.
+      context: ../MeetUpApi
+      dockerfile: MeetUp.Api/Dockerfile
     container_name: smartmeetup-api
     restart: unless-stopped
     expose:
