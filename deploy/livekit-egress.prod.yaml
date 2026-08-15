@@ -1,11 +1,6 @@
-# The egress worker joins rooms as a headless client, records the composite audio, and uploads
-# straight to MinIO. It reaches LiveKit over the internal network, not through Caddy.
-
-api_key: ${LIVEKIT_API_KEY}
-api_secret: ${LIVEKIT_API_SECRET}
-ws_url: ws://livekit:7880
-
-redis:
-  address: redis:6379
-
-log_level: info
+# NO LONGER USED — safe to delete.
+#
+# This config now lives inline in the EGRESS_CONFIG_BODY environment variable in
+# docker-compose.prod.yml, for the same reason as livekit.prod.yaml: a mounted config file is not
+# interpolated, so ${LIVEKIT_API_KEY} reached egress as a literal and recordings failed to
+# authenticate. Egress supports EGRESS_CONFIG_BODY as an alternative to EGRESS_CONFIG_FILE.

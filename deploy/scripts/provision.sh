@@ -65,8 +65,9 @@ ufw allow 80/tcp        comment 'HTTP - required for certificate renewal'
 ufw allow 443/tcp       comment 'HTTPS'
 ufw allow 443/udp       comment 'HTTP/3'
 # WebRTC media cannot pass through the reverse proxy, so LiveKit needs these directly.
-ufw allow 7881/udp      comment 'LiveKit RTC'
-ufw allow 7882/udp      comment 'LiveKit RTC'
+# 7881 is rtc.tcp_port (ICE over TCP) and 7882 is rtc.udp_port — the protocols are not interchangeable.
+ufw allow 7881/tcp      comment 'LiveKit RTC over TCP'
+ufw allow 7882/udp      comment 'LiveKit RTC media'
 ufw allow 5349/tcp      comment 'LiveKit TURN over TCP'
 ufw --force enable
 
@@ -86,7 +87,7 @@ cat <<DONE
 Provisioning complete.
 
   Oracle Cloud reminder: the VCN security list is a separate firewall from ufw. The same ports
-  (22, 80, 443 tcp; 443, 7881, 7882 udp; 5349 tcp) must also be opened as ingress rules in the
+  (22, 80, 443, 5349, 7881 tcp; 443, 7882 udp) must also be opened as ingress rules in the
   console, or traffic never reaches this machine.
 
 Next:
