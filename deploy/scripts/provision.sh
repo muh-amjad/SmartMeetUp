@@ -12,7 +12,7 @@ DEPLOY_USER=${SUDO_USER:-ubuntu}
 
 echo "==> Installing packages"
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg ufw cron
+apt-get install -y ca-certificates curl gnupg ufw cron git
 
 echo "==> Installing Docker from Docker's own repository"
 # Ubuntu's packaged docker.io lags well behind and lacks the compose plugin.
@@ -42,14 +42,20 @@ echo "==> Configuring the firewall"
 # which shows up later as "Caddy cannot get a certificate" and "calls connect but have no media",
 # with no clue pointing at the firewall. Clear those blanket REJECTs and let ufw be the only
 # gatekeeper. Done before ufw is enabled so the box is never left with nothing allowing SSH.
-if iptables -S INPUT 2>/dev/null | grep -qE '^-A INPUT .*(REJECT|DROP)'; then
+reject_rule_numbers() {
+  # Delete by line number rather than by rule spec: reconstructing a spec from `iptables -S` is
+  # fiddly to get exactly right, and a near-miss fails with "invalid rule number".
+  iptables -L INPUT --line-numbers -n 2>/dev/null \
+    | awk '/^[0-9]+/ && ($2 == "REJECT" || $2 == "DROP") { print $1 }' \
+    | sort -rn   # highest first, so deleting one does not renumber the others
+}
+
+if [ -n "$(reject_rule_numbers)" ]; then
   echo "    Found pre-seeded REJECT/DROP rules in the INPUT chain (typical on Oracle images)."
   echo "    Removing them so ufw governs access on its own."
 
-  while iptables -S INPUT | grep -qE '^-A INPUT .*(REJECT|DROP)'; do
-    rule=$(iptables -S INPUT | grep -E '^-A INPUT .*(REJECT|DROP)' | head -1 | sed 's/^-A //')
-    # shellcheck disable=SC2086
-    iptables -D INPUT $rule
+  for num in $(reject_rule_numbers); do
+    iptables -D INPUT "$num" || echo "    Warning: could not delete INPUT rule $num"
   done
 
   # Persist, or a reboot brings the blocking rules straight back.
@@ -58,6 +64,8 @@ if iptables -S INPUT 2>/dev/null | grep -qE '^-A INPUT .*(REJECT|DROP)'; then
   elif [ -f /etc/iptables/rules.v4 ]; then
     iptables-save > /etc/iptables/rules.v4
   fi
+
+  echo "    INPUT chain now has $(reject_rule_numbers | wc -l) REJECT/DROP rule(s) left."
 fi
 
 ufw allow 22/tcp        comment 'SSH'
