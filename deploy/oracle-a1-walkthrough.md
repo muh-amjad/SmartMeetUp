@@ -132,8 +132,10 @@ with that address first and then restart the API.
 Finally the Seq password (Seq is on a public hostname, so give it a real one):
 
 ```bash
-docker run --rm datalust/seq config hash 'pick-a-strong-password'
+echo 'pick-a-strong-password' | docker run --rm -i datalust/seq config hash
 ```
+
+`-i` is required — the password is read from stdin, not taken as an argument.
 
 Paste the output as `SEQ_ADMIN_PASSWORD_HASH`.
 

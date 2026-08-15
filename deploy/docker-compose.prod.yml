@@ -257,8 +257,11 @@ services:
     restart: unless-stopped
     environment:
       ACCEPT_EULA: "Y"
-      # Seq's own login, since Caddy exposes it at /logs on the public hostname.
+      # Seq's own login, since Caddy exposes it on a public hostname.
       SEQ_FIRSTRUN_ADMINPASSWORDHASH: ${SEQ_ADMIN_PASSWORD_HASH}
+      # Seq builds absolute links (sign-in redirects, shared queries) from this. Without it they are
+      # built from the internal address and send the browser somewhere it cannot reach.
+      SEQ_API_CANONICALURI: https://logs.${DOMAIN}
     volumes:
       - seq-data:/data
     expose:
