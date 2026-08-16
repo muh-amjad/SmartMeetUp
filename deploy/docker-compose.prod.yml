@@ -140,7 +140,10 @@ services:
       retries: 5
 
   livekit:
-    image: livekit/livekit-server:v1.8.4
+    # Must stay roughly in step with livekit-client in MeetUpUI/package.json (2.20.x). v1.8.4 was old
+    # enough that the client's /rtc/v1 signal endpoint did not exist on it — the client fell back to
+    # /rtc and connected, but only after a failed handshake, and negotiation was unreliable.
+    image: livekit/livekit-server:v1.13.2
     container_name: smartmeetup-livekit
     restart: unless-stopped
     environment:
