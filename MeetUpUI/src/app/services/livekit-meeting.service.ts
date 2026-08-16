@@ -97,6 +97,19 @@ export class LivekitMeetingService {
       }
     }
 
+    // 5. Unblock audio playback. Browsers refuse to play audio that was not started by a user
+    // gesture, and a remote track arriving over the network does not count as one. joinMeeting is
+    // always reached from a click, so this call is still inside that gesture's window and is
+    // allowed. Without it the audio elements stay silently paused and the call has no sound —
+    // with nothing logged to explain why.
+    if (!room.canPlaybackAudio) {
+      try {
+        await room.startAudio();
+      } catch (err) {
+        console.warn('Audio playback is still blocked; it will need a user interaction', err);
+      }
+    }
+
     this.room = room;
     this.currentMeetingId.set(response.meetingId);
     this.currentMeetingTitle.set(response.title);

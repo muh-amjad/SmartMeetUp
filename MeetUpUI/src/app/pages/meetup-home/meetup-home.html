@@ -87,6 +87,10 @@
                   playsinline
                   [class.video-hidden]="!isRemoteCameraOn(participant)"
                 ></video>
+                <!-- Separate from the video element above: the video stream carries only the video
+                     track, and a participant with their camera off still needs to be heard. -->
+                <audio [srcObject]="getRemoteAudioStream(participant)" autoplay></audio>
+
                 @if (!isRemoteCameraOn(participant)) {
                   <div class="remote-camera-off">Camera Off</div>
                 }
