@@ -1,6 +1,6 @@
 api_key: devkey
 api_secret: devsecret-please-change-in-production-at-least-32-chars
-ws_url: ws://livekit:7880
+ws_url: ws://127.0.0.1:7880
 
 redis:
   address: redis:6379

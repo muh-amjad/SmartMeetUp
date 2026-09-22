@@ -1,4 +1,20 @@
-version: '3.8'
+# Local development infrastructure for SmartMeetUp.
+#
+#   docker compose -f necessary-files/docker-compose.yml up -d
+#
+# The API and the Angular app run on the host (dotnet run / npm start); everything they depend on
+# runs here. Values match appsettings.Development.json.
+#
+# The explicit project name keeps this stack isolated: its containers, its own network and its
+# volumes are all namespaced "smartmeetup-dev_*", so nothing here can collide with another compose
+# project on the same machine. Without it, the project name would be the folder name
+# ("necessary-files"), which would also orphan the existing volumes.
+name: smartmeetup-dev
+
+# Ports are published on 127.0.0.1 rather than every interface, deliberately. On Windows, when a
+# port is published on all interfaces, WSL's localhost forwarder (wslrelay) also claims [::1] for
+# it, accepts connections there and never answers. "localhost" resolves to ::1 first, so the API's
+# database connections hang until Npgsql times out and the app dies on startup.
 
 services:
   postgres:
@@ -9,7 +25,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: smartmeetupdb
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -25,7 +41,7 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@meetup.dev
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       - postgres
 
@@ -36,8 +52,8 @@ services:
     environment:
       ACCEPT_EULA: "Y"
     ports:
-      - "5341:5341"
-      - "5340:80"
+      - "127.0.0.1:5341:5341"
+      - "127.0.0.1:5340:80"
     volumes:
       - seq-data:/data
 
@@ -48,16 +64,18 @@ services:
     image: axllent/mailpit:latest
     container_name: meetup-mailpit
     ports:
-      - "1025:1025"          # SMTP — what the API sends to
-      - "8025:8025"          # Web UI — where you read the caught mail
+      - "127.0.0.1:1025:1025"          # SMTP — what the API sends to
+      - "127.0.0.1:8025:8025"          # Web UI — where you read the caught mail
     environment:
       MP_MAX_MESSAGES: 500
 
   redis:
     image: redis:7-alpine
     container_name: meetup-redis
+    # Only LiveKit and Egress use this, over the internal network. It stays published for
+    # debugging, but 6379 is a popular port — drop this block if another Redis needs it.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -65,13 +83,21 @@ services:
       retries: 5
 
   livekit:
-    image: livekit/livekit-server:latest
+    # Pinned rather than :latest, and to the same version production runs. It must stay roughly in
+    # step with livekit-client in MeetUpUI/package.json (2.20.x): v1.8.4 was old enough that the
+    # client's /rtc/v1 signal endpoint did not exist on it, and negotiation was unreliable.
+    image: livekit/livekit-server:v1.13.2
     container_name: meetup-livekit
+    # --node-ip 127.0.0.1: Docker Desktop publishes ports on the host's localhost, but the
+    # container's own address is unreachable from the browser, so LiveKit must advertise an address
+    # the browser can actually send media to.
     command: --config /livekit.yaml --node-ip 127.0.0.1
     ports:
-      - "7880:7880"          # WebSocket signalling
-      - "7881:7881/udp"      # RTC UDP
-      - "7882:7882/udp"      # RTC UDP fallback
+      - "127.0.0.1:7880:7880"          # WebSocket signalling
+      # 7881 is rtc.tcp_port in livekit.yaml — ICE over TCP. Publishing it as UDP (as this file
+      # previously did) leaves the TCP fallback unreachable while looking correct at a glance.
+      - "127.0.0.1:7881:7881/tcp"      # ICE over TCP fallback
+      - "127.0.0.1:7882:7882/udp"      # RTC media
     volumes:
       - ./livekit.yaml:/livekit.yaml
     depends_on:
@@ -79,26 +105,37 @@ services:
         condition: service_healthy
 
   minio:
-    image: minio/minio:latest
+    # From quay.io and pinned: minio/minio on Docker Hub no longer exists, so ":latest" there fails
+    # with "pull access denied ... repository does not exist".
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: meetup-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
     ports:
-      - "9000:9000"          # S3 API
-      - "9001:9001"          # Web console
+      - "127.0.0.1:9000:9000"          # S3 API
+      - "127.0.0.1:9001:9001"          # Web console
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      # "mc ready local" rather than curl: this image has no curl, so the curl check never turns
+      # healthy and everything with depends_on: minio waits forever.
+      test: ["CMD", "mc", "ready", "local"]
       interval: 15s
       timeout: 5s
       retries: 5
 
   livekit-egress:
-    image: livekit/egress:latest
+    image: livekit/egress:v1.14.1
     container_name: meetup-livekit-egress
+    # Shares LiveKit's network stack, which is what makes recording work here. LiveKit advertises
+    # 127.0.0.1 as its media address (--node-ip above), and from a separate container that points
+    # at the egress container itself, so its media never arrives and recordings come back empty.
+    # Inside LiveKit's own namespace, 127.0.0.1 really is LiveKit. Compose service names (redis,
+    # minio) still resolve normally.
+    # Because the network is shared, egress reaches LiveKit at 127.0.0.1 — see livekit-egress.yaml.
+    network_mode: "service:livekit"
     environment:
       EGRESS_CONFIG_FILE: /out/egress.yaml
     volumes:
@@ -119,4 +156,3 @@ volumes:
   postgres-data:
   seq-data:
   minio-data:
-
