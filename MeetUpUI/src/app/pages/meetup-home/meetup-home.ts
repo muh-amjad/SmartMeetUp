@@ -90,6 +90,11 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
 
   private remoteStreamCache = new Map<string, { stream: MediaStream; trackId: string }>();
 
+  // Audio is cached separately from video on purpose. A participant can turn their camera off while
+  // still talking, and if both shared one stream the audio element would lose its source the moment
+  // the video track went away.
+  private remoteAudioStreamCache = new Map<string, { stream: MediaStream; trackId: string }>();
+
   @ViewChild('pageShell', { static: true })
   pageShellRef!: ElementRef<HTMLElement>;
 
@@ -344,6 +349,39 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
 
     const stream = new MediaStream([track]);
     this.remoteStreamCache.set(participant.identity, { stream, trackId: track.id });
+    return stream;
+  }
+
+  /**
+   * Returns a stable MediaStream for the participant's microphone, or null.
+   *
+   * This has to exist separately from the video stream and feed its own <audio> element. The video
+   * element's stream carries only the video track, so without this the remote audio track is
+   * subscribed and decoded but never routed to an output device — the call looks connected and is
+   * completely silent.
+   *
+   * Muted publications are deliberately still returned: LiveKit keeps the track through a mute, and
+   * dropping the stream here would tear the element down and force a fresh one on every unmute.
+   */
+  getRemoteAudioStream(participant: {
+    identity: string;
+    getTrackPublications: () => any[];
+  }): MediaStream | null {
+    const audioPub = participant.getTrackPublications().find((pub) => pub.kind === 'audio');
+    const track = audioPub?.track?.mediaStreamTrack as MediaStreamTrack | undefined;
+
+    if (!track) {
+      this.remoteAudioStreamCache.delete(participant.identity);
+      return null;
+    }
+
+    const cached = this.remoteAudioStreamCache.get(participant.identity);
+    if (cached && cached.trackId === track.id) {
+      return cached.stream;
+    }
+
+    const stream = new MediaStream([track]);
+    this.remoteAudioStreamCache.set(participant.identity, { stream, trackId: track.id });
     return stream;
   }
 

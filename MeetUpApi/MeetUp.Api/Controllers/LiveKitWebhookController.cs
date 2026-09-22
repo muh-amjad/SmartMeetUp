@@ -254,6 +254,24 @@ public class LiveKitWebhookController : ControllerBase
         }
 
         var userId = payload.Participant.Identity;
+
+        // Not every participant is one of our users. The egress worker joins the room to record it,
+        // with an identity like "EG_xxxxxxxx", and MeetingParticipant.UserId is a foreign key to
+        // AspNetUsers — so inserting it violates the constraint, the handler throws, and LiveKit
+        // sees a 500 and retries the same event on a backoff forever.
+        //
+        // Checking the user exists rather than filtering on an "EG_" prefix keeps this correct for
+        // any other non-user identity LiveKit introduces later.
+        var isKnownUser = await _dbContext.Users.AnyAsync(u => u.Id == userId, ct);
+        if (!isKnownUser)
+        {
+            _logger.LogDebug(
+                "Ignoring participant_joined for non-user identity {Identity} in room {RoomName} " +
+                "(this is normally the recorder)",
+                userId, payload.Room.Name);
+            return;
+        }
+
         var existing = await _participantRepository.GetByMeetingAndUserAsync(meeting.Id, userId, ct);
 
         if (existing is null)

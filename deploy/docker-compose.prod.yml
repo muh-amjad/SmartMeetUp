@@ -72,6 +72,11 @@ services:
       # Both are in-network here, but they are separate keys because they differ in development.
       BlobStorage__ServiceUrl: http://minio:9000
       BlobStorage__EgressServiceUrl: http://minio:9000
+      # Presigned download URLs are signed against this origin, because SigV4 covers the Host header
+      # and the path — a URL signed for minio:9000 cannot be opened by a browser, and AssemblyAI
+      # could never fetch the recording it is asked to transcribe. Served by Caddy on its own
+      # hostname rather than a path prefix, so the signed path reaches MinIO unmodified.
+      BlobStorage__PublicServiceUrl: https://storage.${DOMAIN}
       BlobStorage__AccessKey: ${MINIO_ROOT_USER}
       BlobStorage__SecretKey: ${MINIO_ROOT_PASSWORD}
       BlobStorage__BucketName: ${S3_BUCKET}
@@ -135,22 +140,68 @@ services:
       retries: 5
 
   livekit:
-    image: livekit/livekit-server:v1.8.4
+    # Must stay roughly in step with livekit-client in MeetUpUI/package.json (2.20.x). v1.8.4 was old
+    # enough that the client's /rtc/v1 signal endpoint did not exist on it — the client fell back to
+    # /rtc and connected, but only after a failed handshake, and negotiation was unreliable.
+    image: livekit/livekit-server:v1.13.2
     container_name: smartmeetup-livekit
     restart: unless-stopped
-    command: --config /livekit.yaml
     environment:
       # Quoted because the value itself contains a colon — "key: secret" is LiveKit's expected
       # format, but unquoted YAML would read it as a nested mapping.
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
-    volumes:
-      - ./livekit.prod.yaml:/livekit.yaml:ro
+
+      # The config is passed as a body rather than a mounted file on purpose. livekit-server reads a
+      # --config file verbatim (cmd/server/main.go: getConfigString is a plain os.ReadFile) and does
+      # no ${VAR} expansion, so a mounted YAML containing ${LIVEKIT_API_KEY} would leave the literal
+      # string in webhook.api_key. LiveKit then fails to find a matching key and silently never signs
+      # or sends webhooks — meetings would end without recordings or transcripts ever being
+      # registered. Compose *does* interpolate this block, so the value below is always real.
+      LIVEKIT_CONFIG: |
+        port: 7880
+
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          # The VM has a public address that is not on its own interface, so LiveKit must discover it
+          # rather than advertise the private one — otherwise remote peers get an unreachable candidate.
+          use_external_ip: true
+
+        redis:
+          address: redis:6379
+
+        room:
+          auto_create: true
+          empty_timeout: 300
+          max_participants: 50
+
+        # TURN is deliberately off. LiveKit's TURN needs its own TLS certificate to advertise a
+        # turns: URL, and the only certificate on this box belongs to Caddy, which does not touch
+        # port 5349. Running it without TLS would advertise a URL that clients refuse to use.
+        #
+        # Nothing is lost: rtc.tcp_port above is the ICE-over-TCP fallback, which covers the same
+        # case — viewers whose network blocks UDP — without needing a certificate.
+        #
+        # (An earlier version set `turn.tcp_port`, which is not a field LiveKit has; it is `tls_port`.
+        # Config parsing is strict, so the server printed the error and exited 0 — which Docker saw
+        # as a clean exit and restarted, forever.)
+        turn:
+          enabled: false
+
+        webhook:
+          api_key: ${LIVEKIT_API_KEY}
+          urls:
+            - http://api:8080/api/webhooks/livekit
+
+        logging:
+          level: info
     # WebRTC media cannot traverse an HTTPS reverse proxy, so these are published straight on the
     # host. The signalling WebSocket does go through Caddy, on /livekit.
     ports:
-      - "7881:7881/udp"
+      # 7881 is rtc.tcp_port — ICE over TCP. It must be published as TCP; publishing it as UDP left
+      # the TCP fallback unreachable while looking correct at a glance.
+      - "7881:7881/tcp"
       - "7882:7882/udp"
-      - "5349:5349/tcp"   # TURN over TCP, for viewers behind symmetric NAT
     expose:
       - "7880"
     depends_on:
@@ -158,13 +209,24 @@ services:
         condition: service_healthy
 
   livekit-egress:
-    image: livekit/egress:latest
+    # Pinned rather than :latest — this image bundles Chrome and GStreamer, so an unattended bump is
+    # the most likely way for recording to break after an unrelated redeploy. arm64 is published.
+    image: livekit/egress:v1.14.1
     container_name: smartmeetup-egress
     restart: unless-stopped
     environment:
-      EGRESS_CONFIG_FILE: /out/egress.yaml
-    volumes:
-      - ./livekit-egress.prod.yaml:/out/egress.yaml:ro
+      # Same reason as livekit above: a mounted config file is not interpolated, so ${LIVEKIT_API_KEY}
+      # would reach egress as a literal and every recording would fail to authenticate. Egress reads
+      # the body from EGRESS_CONFIG_BODY, and Compose fills in the values here.
+      EGRESS_CONFIG_BODY: |
+        api_key: ${LIVEKIT_API_KEY}
+        api_secret: ${LIVEKIT_API_SECRET}
+        ws_url: ws://livekit:7880
+
+        redis:
+          address: redis:6379
+
+        log_level: info
     # Room-composite recording renders through a headless browser, which needs this capability.
     cap_add:
       - CAP_SYS_ADMIN
@@ -203,8 +265,11 @@ services:
     restart: unless-stopped
     environment:
       ACCEPT_EULA: "Y"
-      # Seq's own login, since Caddy exposes it at /logs on the public hostname.
+      # Seq's own login, since Caddy exposes it on a public hostname.
       SEQ_FIRSTRUN_ADMINPASSWORDHASH: ${SEQ_ADMIN_PASSWORD_HASH}
+      # Seq builds absolute links (sign-in redirects, shared queries) from this. Without it they are
+      # built from the internal address and send the browser somewhere it cannot reach.
+      SEQ_API_CANONICALURI: https://logs.${DOMAIN}
     volumes:
       - seq-data:/data
     expose:

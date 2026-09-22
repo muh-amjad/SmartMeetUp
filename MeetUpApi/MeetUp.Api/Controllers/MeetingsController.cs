@@ -99,6 +99,17 @@ public class MeetingsController : ControllerBase
         await _meetingRepository.AddAsync(meeting, ct);
         await _meetingRepository.SaveChangesAsync(ct);
 
+        // Same reasoning as in Join: membership is known here, so record it now instead of waiting
+        // for the participant_joined webhook to tell us something we already know.
+        await _participantRepository.AddAsync(new MeetingParticipant
+        {
+            Id = Guid.NewGuid(),
+            MeetingId = meeting.Id,
+            UserId = hostUserId,
+            Role = ParticipantRole.Host,
+        }, ct);
+        await _participantRepository.SaveChangesAsync(ct);
+
         // Try to create the room upfront so we can control settings.
         // If this fails, LiveKit will auto-create on first participant join (room.auto_create=true).
         try
@@ -164,6 +175,33 @@ public class MeetingsController : ControllerBase
         }
 
         var isHost = string.Equals(meeting.HostUserId, userId, StringComparison.Ordinal);
+
+        // Record membership here rather than waiting for LiveKit's participant_joined webhook.
+        //
+        // That webhook is asynchronous, and the client calls /chat immediately after joining — so
+        // the read routinely overtakes the webhook and the endpoint's "are you a participant?" check
+        // fails with 403 for anyone who is not the host. Membership is something this request
+        // already knows for certain, so there is no reason to learn it from a round trip.
+        //
+        // The webhook still runs and fills in JoinedUtc; it just no longer gates access.
+        var existing = await _participantRepository.GetByMeetingAndUserAsync(meeting.Id, userId, ct);
+        if (existing is null)
+        {
+            await _participantRepository.AddAsync(new MeetingParticipant
+            {
+                Id = Guid.NewGuid(),
+                MeetingId = meeting.Id,
+                UserId = userId,
+                Role = isHost ? ParticipantRole.Host : ParticipantRole.Participant,
+            }, ct);
+        }
+        else
+        {
+            // Rejoining after having left.
+            existing.LeftUtc = null;
+        }
+
+        await _participantRepository.SaveChangesAsync(ct);
 
         var token = _liveKitService.GenerateAccessToken(
             roomName: meeting.LiveKitRoomName,

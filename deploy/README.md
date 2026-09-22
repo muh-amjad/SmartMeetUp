@@ -19,16 +19,22 @@ Contabo, a spare box). Oracle's Always Free A1 tier is just the cheapest option 
 | `caddy` | `:80`, `:443` | TLS termination, single entry point |
 | `web` | `https://$DOMAIN/` | nginx serving the Angular build |
 | `api` | `https://$DOMAIN/api/*` | .NET API + Hangfire worker in-process |
-| `livekit` | `wss://$DOMAIN/livekit` + UDP `7881/7882`, TCP `5349` | media bypasses Caddy — see below |
+| `livekit` | `wss://$DOMAIN/livekit` + UDP `7882`, TCP `7881`/`5349` | media bypasses Caddy — see below |
 | `livekit-egress` | internal | records meetings, uploads to MinIO |
-| `minio` | `https://$DOMAIN/storage/*` | recordings; objects stay private |
+| `minio` | `https://storage.$DOMAIN` | recordings; objects stay private |
 | `postgres` | internal only | not published to the host |
 | `redis` | internal only | LiveKit coordination |
-| `seq` | `https://$DOMAIN/logs/` | structured logs, own admin login |
+| `seq` | `https://logs.$DOMAIN` | structured logs, own admin login |
 
 **Why the LiveKit ports are published directly:** WebRTC media is UDP and cannot pass through an
-HTTPS reverse proxy. Only the signalling WebSocket goes through Caddy. TCP 5349 is TURN, needed by
-viewers on networks that block UDP entirely.
+HTTPS reverse proxy. Only the signalling WebSocket goes through Caddy. UDP 7882 carries media; TCP
+7881 is the ICE-over-TCP fallback and TCP 5349 is TURN, both for viewers on networks that block UDP.
+
+**Why storage and logs get their own hostnames rather than paths:** presigned URLs are AWS SigV4,
+which signs the Host header *and* the URI path. Stripping a `/storage` prefix on the way to MinIO
+would change the path it recomputes the signature over, so every recording link would fail with
+`SignatureDoesNotMatch`. Seq has a related problem — it serves absolute asset paths, which 404
+behind a stripped prefix. A whole-hostname proxy passes both through unmodified.
 
 ---
 
@@ -50,7 +56,8 @@ firewall from the VM's own, and traffic never arrives without it:
 | 22 | TCP | SSH — restrict to your own IP |
 | 80 | TCP | HTTP; required for certificate issuance and renewal |
 | 443 | TCP + UDP | HTTPS and HTTP/3 |
-| 7881, 7882 | UDP | LiveKit media |
+| 7882 | UDP | LiveKit media |
+| 7881 | TCP | LiveKit ICE over TCP |
 | 5349 | TCP | LiveKit TURN |
 
 ### 2. Bootstrap the machine
@@ -102,6 +109,9 @@ Open a PR and wait for the merge.
 `<ip>.nip.io` to that IP, and Caddy will still issue a real certificate for it — so the full
 deployment can be demonstrated before the PR lands. Switch `DOMAIN` later and restart.
 
+Whichever you choose, `storage.$DOMAIN` and `logs.$DOMAIN` must resolve to the same VM.
+`nip.io` does this automatically; on a real domain add both records (or a wildcard) up front.
+
 ### 5. Bring it up
 
 ```bash
@@ -116,6 +126,8 @@ migrations apply automatically on API startup.
 ```bash
 curl https://$DOMAIN/health/ready          # {"status":"Healthy"}
 curl -I https://$DOMAIN/                   # 200, and a valid certificate
+curl -I https://storage.$DOMAIN/           # 403 from MinIO is correct — it means TLS works
+                                           # and unsigned requests are refused
 docker compose -f deploy/docker-compose.prod.yml ps   # every service up
 ```
 
@@ -159,7 +171,7 @@ docker compose -f deploy/docker-compose.prod.yml up -d --build
 docker compose -f deploy/docker-compose.prod.yml logs -f api
 ```
 
-Or browse structured logs at `https://$DOMAIN/logs/`.
+Or browse structured logs at `https://logs.$DOMAIN`.
 
 **Database backups** — nightly at 03:15 UTC via cron, 7 days retained in `/opt/smartmeetup/backups`.
 Run one by hand with `bash deploy/scripts/backup-db.sh`. Restore:
@@ -213,12 +225,16 @@ Scoped out for a single-VM demo, and each is a small change when it stops being 
 **No certificate issued.** Port 80 must be reachable from the internet — check both `ufw` and the
 VCN security list. Confirm DNS resolves to the VM: `dig +short $DOMAIN`. Then `docker compose logs caddy`.
 
-**Calls connect but no audio or video.** Almost always UDP 7881/7882 blocked in the VCN security
-list. Signalling goes through Caddy so the call *appears* to start, then no media arrives.
+**Calls connect but no audio or video.** Almost always UDP 7882 blocked in the VCN security list.
+Signalling goes through Caddy so the call *appears* to start, then no media arrives.
 
 **Recordings never appear.** Check `docker compose logs livekit-egress`. The egress worker needs
-`CAP_SYS_ADMIN` (already set) and must reach MinIO on the internal network.
+`CAP_SYS_ADMIN` (already set) and must reach MinIO on the internal network. If egress looks idle and
+never receives a request, check that LiveKit webhooks are arriving: `docker compose logs api | grep
+webhooks`. Nothing there means `webhook.api_key` does not match a configured key — it is set from
+`LIVEKIT_CONFIG` in the compose file, which Compose interpolates.
 
 **Transcript stays at `Processing`.** AssemblyAI fetches the recording over a presigned URL, so
-`https://$DOMAIN/storage/*` must be publicly reachable. Verify with
-`curl -I "<presigned-url-from-logs>"`.
+`https://storage.$DOMAIN` must be publicly reachable and hold a valid certificate. Verify with
+`curl -I "<presigned-url-from-logs>"` — expect 200. A `SignatureDoesNotMatch` means
+`BlobStorage__PublicServiceUrl` does not match the host actually serving the request.

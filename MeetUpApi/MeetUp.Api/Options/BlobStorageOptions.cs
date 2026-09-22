@@ -15,6 +15,23 @@ public sealed class BlobStorageOptions
     // even while the API itself still runs on the host in dev.
     public string EgressServiceUrl { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Endpoint that presigned download URLs are signed against — the address a *browser* or an
+    /// external service (AssemblyAI fetching a recording) can actually reach.
+    /// <para>
+    /// This has to be separate from <see cref="ServiceUrl"/>. In production the API talks to MinIO
+    /// over the compose network at http://minio:9000, but a URL signed against that host is useless
+    /// outside the network. SigV4 signs the Host header and the URI path, so the URL must be signed
+    /// against the same public origin the client will call — rewriting the host afterwards would
+    /// invalidate the signature.
+    /// </para>
+    /// <para>
+    /// Leave blank to fall back to <see cref="ServiceUrl"/>, which is correct in development where
+    /// MinIO's port is published on localhost.
+    /// </para>
+    /// </summary>
+    public string PublicServiceUrl { get; set; } = string.Empty;
+
     public string AccessKey { get; set; } = string.Empty;
     public string SecretKey { get; set; } = string.Empty;
     public string BucketName { get; set; } = string.Empty;
