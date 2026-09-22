@@ -1,0 +1,122 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: smartmeetup-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: smartmeetupdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: meetup-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@meetup.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+  seq:
+    # 2024.4 was never published to Docker Hub — pulling it fails with "no such manifest".
+    image: datalust/seq:2025.1
+    container_name: meetup-seq
+    environment:
+      ACCEPT_EULA: "Y"
+    ports:
+      - "5341:5341"
+      - "5340:80"
+    volumes:
+      - seq-data:/data
+
+  # Catches every outgoing email locally so the follow-up send path can be exercised without a
+  # provider account or a verified sending domain. Mailpit rather than the MailHog the plan named:
+  # MailHog is unmaintained, and Mailpit is its actively developed drop-in equivalent.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: meetup-mailpit
+    ports:
+      - "1025:1025"          # SMTP — what the API sends to
+      - "8025:8025"          # Web UI — where you read the caught mail
+    environment:
+      MP_MAX_MESSAGES: 500
+
+  redis:
+    image: redis:7-alpine
+    container_name: meetup-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: meetup-livekit
+    command: --config /livekit.yaml --node-ip 127.0.0.1
+    ports:
+      - "7880:7880"          # WebSocket signalling
+      - "7881:7881/udp"      # RTC UDP
+      - "7882:7882/udp"      # RTC UDP fallback
+    volumes:
+      - ./livekit.yaml:/livekit.yaml
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    container_name: meetup-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"          # S3 API
+      - "9001:9001"          # Web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  livekit-egress:
+    image: livekit/egress:latest
+    container_name: meetup-livekit-egress
+    environment:
+      EGRESS_CONFIG_FILE: /out/egress.yaml
+    volumes:
+      - ./livekit-egress.yaml:/out/egress.yaml
+    # Room-composite egress renders the recording via a headless Chrome instance internally,
+    # which needs this capability even for audio-only recordings.
+    cap_add:
+      - CAP_SYS_ADMIN
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+      minio:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  seq-data:
+  minio-data:
+
