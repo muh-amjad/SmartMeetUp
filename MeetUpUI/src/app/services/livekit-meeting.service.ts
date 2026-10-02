@@ -23,12 +23,27 @@ export class LivekitMeetingService {
 
   private room: Room | null = null;
 
-  /** How often finished speaking turns are pushed to the server during a call. */
-  private static readonly SpeakingFlushIntervalMs = 15_000;
+  /**
+   * How often finished speaking turns are pushed to the server during a call. Short, because
+   * anything still buffered when a tab is closed outright is at risk, and every turn that never
+   * arrives is a stretch of transcript that cannot be attributed to its speaker.
+   */
+  private static readonly SpeakingFlushIntervalMs = 5_000;
+
+  /** Upper bound on turns held for retry while the connection is down. */
+  private static readonly MaxPendingSpeakingIntervals = 1_000;
 
   private speakingSince: Date | null = null;
   private pendingSpeakingIntervals: SpeakingInterval[] = [];
   private speakingFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Closing the tab skips Angular teardown entirely; this closes the open turn and sends it. */
+  private readonly onPageHide = () => {
+    if (this.room) {
+      this.trackLocalSpeaking(this.room, []);
+    }
+    void this.flushSpeakingIntervals();
+  };
 
   // ── Public reactive state ────────────────────────────────
   readonly connectionState = signal<ConnectionState>(ConnectionState.Disconnected);
@@ -38,6 +53,21 @@ export class LivekitMeetingService {
   readonly currentMeetingId = signal<string | null>(null);
   readonly currentMeetingTitle = signal<string>('');
   readonly isHost = signal<boolean>(false);
+
+  /**
+   * Local camera and mic state as signals. The room object mutates in place, and the local
+   * participant is always the same object, so re-setting `localParticipant` after a toggle is a
+   * no-op to Angular — the buttons and the self-view would not update until something unrelated
+   * re-rendered. These change exactly when the hardware state does.
+   */
+  readonly cameraEnabled = signal<boolean>(false);
+  readonly micEnabled = signal<boolean>(false);
+
+  /** Bumped whenever a local track is (un)published, so the self-view re-attaches its video. */
+  readonly localTrackVersion = signal<number>(0);
+
+  /** Identities currently speaking, for highlighting their tiles. */
+  readonly activeSpeakerIds = signal<ReadonlySet<string>>(new Set());
 
   /**
    * Join a meeting: fetches a fresh token from the API, then connects to LiveKit.
@@ -114,7 +144,11 @@ export class LivekitMeetingService {
     this.currentMeetingId.set(response.meetingId);
     this.currentMeetingTitle.set(response.title);
     this.isHost.set(response.isHost);
-    this.localParticipant.set(room.localParticipant);
+    this.syncLocalState(room);
+    // Seed from the join response rather than waiting for RecordingStatusChanged: the SDK drops
+    // that event while the room is still connecting, so anyone joining a call that is already
+    // being recorded (every invitee, or a refresh) would never see the recording indicator.
+    this.isRecording.set(room.isRecording);
     this.refreshRemoteParticipants();
     this.startSpeakingFlushTimer();
   }
@@ -172,6 +206,7 @@ export class LivekitMeetingService {
           .filter((pub) => pub.kind === 'video')
           .forEach((pub) => pub.track?.stop());
       }
+      this.syncLocalState(this.room);
     }
   }
 
@@ -191,6 +226,7 @@ export class LivekitMeetingService {
           .filter((pub) => pub.kind === 'audio')
           .forEach((pub) => pub.track?.stop());
       }
+      this.syncLocalState(this.room);
     }
   }
 
@@ -252,9 +288,23 @@ export class LivekitMeetingService {
       .on(RoomEvent.TrackMuted, () => this.refreshRemoteParticipants())
       .on(RoomEvent.TrackUnmuted, () => this.refreshRemoteParticipants())
       .on(RoomEvent.RecordingStatusChanged, (recording) => this.isRecording.set(recording))
-      .on(RoomEvent.LocalTrackPublished, () => this.localParticipant.set(room.localParticipant))
-      .on(RoomEvent.LocalTrackUnpublished, () => this.localParticipant.set(room.localParticipant))
-      .on(RoomEvent.ActiveSpeakersChanged, (speakers) => this.trackLocalSpeaking(room, speakers));
+      .on(RoomEvent.LocalTrackPublished, () => this.syncLocalState(room))
+      .on(RoomEvent.LocalTrackUnpublished, () => this.syncLocalState(room))
+      .on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+        this.activeSpeakerIds.set(new Set(speakers.map((s) => s.identity)));
+        this.trackLocalSpeaking(room, speakers);
+      });
+  }
+
+  /** Pushes the local participant's current hardware state into the signals the UI reads. */
+  private syncLocalState(room: Room | null): void {
+    if (!room) {
+      return;
+    }
+    this.localParticipant.set(room.localParticipant);
+    this.cameraEnabled.set(room.localParticipant.isCameraEnabled);
+    this.micEnabled.set(room.localParticipant.isMicrophoneEnabled);
+    this.localTrackVersion.update((v) => v + 1);
   }
 
   /**
@@ -292,6 +342,7 @@ export class LivekitMeetingService {
       () => void this.flushSpeakingIntervals(),
       LivekitMeetingService.SpeakingFlushIntervalMs,
     );
+    window.addEventListener('pagehide', this.onPageHide);
   }
 
   private stopSpeakingFlushTimer(): void {
@@ -299,10 +350,15 @@ export class LivekitMeetingService {
       clearInterval(this.speakingFlushTimer);
       this.speakingFlushTimer = null;
     }
+    window.removeEventListener('pagehide', this.onPageHide);
   }
 
-  /** Sends whatever speaking turns have accumulated. Failures are dropped: analytics are not worth
-   *  interrupting a call for, and the next flush carries on regardless. */
+  /**
+   * Sends whatever speaking turns have accumulated. A failed send never interrupts the call, but
+   * the batch is put back and goes out with the next flush. These turns are the only record of who
+   * was speaking when; the server cannot reconstruct a lost one, and its transcript lines then
+   * stay "Speaker B".
+   */
   private async flushSpeakingIntervals(): Promise<void> {
     const meetingId = this.currentMeetingId();
     if (!meetingId || this.pendingSpeakingIntervals.length === 0) {
@@ -315,7 +371,10 @@ export class LivekitMeetingService {
     try {
       await this.signalR.reportSpeakingIntervals(meetingId, batch);
     } catch (err) {
-      console.warn('Could not report speaking intervals', err);
+      console.warn('Could not report speaking intervals; will retry', err);
+      this.pendingSpeakingIntervals = [...batch, ...this.pendingSpeakingIntervals].slice(
+        -LivekitMeetingService.MaxPendingSpeakingIntervals,
+      );
     }
   }
 
@@ -333,6 +392,9 @@ export class LivekitMeetingService {
     this.pendingSpeakingIntervals = [];
     this.remoteParticipants.set([]);
     this.localParticipant.set(null);
+    this.cameraEnabled.set(false);
+    this.micEnabled.set(false);
+    this.activeSpeakerIds.set(new Set());
     this.isRecording.set(false);
     this.currentMeetingId.set(null);
     this.currentMeetingTitle.set('');

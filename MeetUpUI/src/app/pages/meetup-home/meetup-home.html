@@ -1,188 +1,342 @@
-<div class="app-shell" #pageShell>
-  <header class="top-bar">
-    <div>
-      <p class="kicker">MeetUp Workbench</p>
-      <h1>Meeting Room</h1>
-      <p class="identity">{{ currentUsername() }} • {{ currentEmail() }}</p>
-    </div>
-
-    <div class="header-actions">
-      <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
-      <button type="button" class="secondary" (click)="goToDashboard()">Dashboard</button>
-    </div>
-  </header>
-
+<div class="app-shell" [class.in-call]="inCall()" #pageShell>
   @if (incomingInvite(); as incoming) {
-    <div class="incoming-call-banner">
-      <span>{{ incoming.fromUsername }} is calling...</span>
+    <div class="incoming-call-banner" role="alertdialog" aria-live="assertive">
+      <div class="incoming-text">
+        <span class="avatar avatar-sm" aria-hidden="true">{{ initial(incoming.fromUsername) }}</span>
+        <span>
+          <strong>{{ incoming.fromUsername }}</strong>
+          {{ inCall() ? 'is inviting you to another call' : 'is calling...' }}
+          @if (inCall()) {
+            <small>Joining will leave your current call.</small>
+          }
+        </span>
+      </div>
       <div class="incoming-actions">
-        <button type="button" class="accept-btn" (click)="acceptIncomingCall()">Accept</button>
-        <button type="button" class="reject-btn" (click)="rejectIncomingCall()">Reject</button>
+        <button type="button" class="accept-btn" (click)="acceptIncomingCall()">
+          {{ inCall() ? 'Join' : 'Accept' }}
+        </button>
+        <button type="button" class="reject-btn" (click)="rejectIncomingCall()">
+          {{ inCall() ? 'Decline' : 'Reject' }}
+        </button>
       </div>
     </div>
   }
 
-  @if (ringingMessage()) {
-    <div class="ringing-banner">{{ ringingMessage() }}</div>
-  }
+  @if (!inCall()) {
+    <!-- ── Lobby: find someone and start a call ───────────────────────── -->
+    <header class="top-bar">
+      <div>
+        <p class="kicker">MeetUp Workbench</p>
+        <h1>Meeting Room</h1>
+        <p class="identity">{{ currentUsername() }} • {{ currentEmail() }}</p>
+      </div>
 
-  <section class="search-panel">
-    <h2>Search Users</h2>
-    <form [formGroup]="searchForm" (ngSubmit)="searchUsers()" class="search-form">
-      <input type="text" formControlName="query" placeholder="Search by username or email" />
-      <button type="submit" [disabled]="searchForm.invalid || searching()">
-        {{ searching() ? 'Searching...' : 'Search' }}
-      </button>
-    </form>
+      <div class="header-actions">
+        <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
+        <button type="button" class="secondary" (click)="goToDashboard()">Dashboard</button>
+      </div>
+    </header>
 
-    <p class="search-message">{{ searchMessage() }}</p>
+    @if (ringingMessage()) {
+      <div class="ringing-banner">{{ ringingMessage() }}</div>
+    }
+    @if (mediaError()) {
+      <p class="media-error">{{ mediaError() }}</p>
+    }
 
-    <div class="search-results">
-      @for (result of searchResults(); track result.userId) {
-        <div class="search-item">
-          <div>
-            <strong>{{ result.username }}</strong>
-            <p>{{ result.email }}</p>
-            <span [class.online]="result.isOnline" [class.offline]="!result.isOnline">
-              {{ result.isOnline ? 'Online' : 'Offline' }}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            (click)="callSearchedUser(result)"
-            [disabled]="!result.isOnline || !result.connectionId"
-          >
-            Call
+    <div class="lobby-grid">
+      <section class="search-panel">
+        <h2>Search Users</h2>
+        <form [formGroup]="searchForm" (ngSubmit)="searchUsers()" class="search-form">
+          <input type="text" formControlName="query" placeholder="Search by username or email" />
+          <button type="submit" [disabled]="searchForm.invalid || searching()">
+            {{ searching() ? 'Searching...' : 'Search' }}
           </button>
-        </div>
-      }
-    </div>
-  </section>
+        </form>
 
-  <main class="main-grid main-grid-call">
-    <section class="content-section content-section-call">
-        <div class="stage-with-chat">
-        <section class="meeting-stage">
-          @if (mediaError()) {
-            <p class="media-error">{{ mediaError() }}</p>
-          }
+        <p class="search-message">{{ searchMessage() }}</p>
 
-          <div class="remote-grid" [class.empty-grid]="!remoteParticipants().length">
-            @if (!remoteParticipants().length) {
-              <article class="waiting-card">
-                <h3>Waiting for participants</h3>
-                <p>Invite online users from the right panel to join your room.</p>
-              </article>
-            }
-
-            @for (
-              participant of remoteParticipants();
-              track trackByParticipantId($index, participant)
-            ) {
-              <article class="remote-tile">
-                <video
-                  [srcObject]="getRemoteVideoStream(participant)"
-                  autoplay
-                  playsinline
-                  [class.video-hidden]="!isRemoteCameraOn(participant)"
-                ></video>
-                <!-- Separate from the video element above: the video stream carries only the video
-                     track, and a participant with their camera off still needs to be heard. -->
-                <audio [srcObject]="getRemoteAudioStream(participant)" autoplay></audio>
-
-                @if (!isRemoteCameraOn(participant)) {
-                  <div class="remote-camera-off">Camera Off</div>
-                }
-                <span class="remote-label">{{ getParticipantName(participant) }}</span>
-                <span
-                  class="remote-mic-status"
-                  [class.remote-mic-off]="!isRemoteMicOn(participant)"
-                >
-                  {{ isRemoteMicOn(participant) ? 'Mic On' : 'Mic Off' }}
+        <div class="search-results">
+          @for (result of searchResults(); track result.userId) {
+            <div class="search-item">
+              <div class="person-text">
+                <strong>{{ result.username }}</strong>
+                <p>{{ result.email }}</p>
+                <span [class.online]="result.isOnline" [class.offline]="!result.isOnline">
+                  {{ result.isOnline ? 'Online' : 'Offline' }}
                 </span>
-              </article>
-            }
-          </div>
-
-          <article class="local-pip">
-            <video #localVideo autoplay playsinline muted></video>
-            <span class="local-label">You</span>
-          </article>
-        </section>
-
-              <!-- Chat side panel -->
-          @if (chatOpen()) {
-            <aside class="chat-panel">
-              <header class="chat-header">
-                <h3>Chat</h3>
-                <button type="button" class="chat-close" (click)="toggleChat()" aria-label="Close chat">✕</button>
-              </header>
-
-              <div class="chat-messages">
-                @if (!chatMessages().length) {
-                  <p class="chat-empty">No messages yet. Say hi!</p>
-                }
-                @for (msg of chatMessages(); track trackByChatId($index, msg)) {
-                  <div class="chat-message" [class.chat-mine]="isMyMessage(msg)">
-                    <div class="chat-meta">
-                      <span class="chat-sender">{{ msg.senderUsername }}</span>
-                      <span class="chat-time">{{ formatChatTime(msg.sentUtc) }}</span>
-                    </div>
-                    <div class="chat-text">{{ msg.text }}</div>
-                  </div>
-                }
               </div>
 
-              <form class="chat-input" (ngSubmit)="sendChat()">
-                <input
-                  type="text"
-                  placeholder="Type a message..."
-                  [value]="chatDraft()"
-                  (input)="chatDraft.set($any($event.target).value)"
-                  maxlength="2000"
-                />
-                <button type="submit" [disabled]="!chatDraft().trim()">Send</button>
-              </form>
-            </aside>
+              <button
+                type="button"
+                class="primary"
+                (click)="callSearchedUser(result)"
+                [disabled]="!result.isOnline || !result.connectionId"
+              >
+                Call
+              </button>
+            </div>
           }
         </div>
+      </section>
 
-        
-        <div class="meeting-controls">
-          @if (isRecording()) {
-          <div class="recording-indicator">● REC</div>
+      <aside class="users-section">
+        <h3>Online Participants</h3>
+
+        @if (!onlineUsers().length) {
+          <p class="empty">No one else is online right now.</p>
         }
-          <button type="button" class="secondary" (click)="toggleCamera()">
-            {{ isCameraOn ? 'Camera Off' : 'Camera On' }}
-          </button>
-          <button type="button" class="secondary" (click)="toggleMic()">
-            {{ isMicOn ? 'Mic Off' : 'Mic On' }}
-          </button>
-          <button type="button" class="danger" (click)="endCall()">End Call</button>
-        </div>
-    </section>
 
-    <aside class="users-section">
-      <h3>Online Participants</h3>
+        @for (user of onlineUsers(); track user.id) {
+          <div class="user-item">
+            <span class="avatar avatar-sm" aria-hidden="true">{{ initial(user.username) }}</span>
+            <div class="person-text">
+              <span>{{ user.username }}</span>
+              <small>{{ user.email || 'No email exposed' }}</small>
+              <span class="status" [class.busy]="user.isInCall">{{ userStatus(user) }}</span>
+            </div>
 
-      @if (!onlineUsers().length) {
-        <p class="empty">No active participants yet.</p>
-      }
-
-      @for (user of onlineUsers(); track user.id) {
-        <div class="user-item">
-          <div class="user-labels">
-            <span>{{ user.username }}</span>
-            <small>{{ user.email || 'No email exposed' }}</small>
-            <span class="status" [class.busy]="user.isInCall">{{ userStatus(user) }}</span>
+            @if (canCall(user)) {
+              <button type="button" class="primary" (click)="callUser(user)">Call</button>
+            }
           </div>
-
-          @if (canCall(user)) {
-            <button type="button" (click)="callUser(user)">Call</button>
+        }
+      </aside>
+    </div>
+  } @else {
+    <!-- ── In a call ──────────────────────────────────────────────────── -->
+    <div class="call-layout" [class.panel-open]="!!panel()">
+      <header class="call-header">
+        <div class="call-title">
+          <h1>{{ currentMeetingTitle() || 'Meeting' }}</h1>
+          <span class="call-meta">{{ tileCount() }} in call</span>
+          <!-- Beside the title rather than in the corner, where notifications would cover it. -->
+          @if (isRecording()) {
+            <span class="recording-indicator" role="status">
+              <span class="rec-dot" aria-hidden="true"></span>REC
+            </span>
           }
         </div>
+      </header>
+
+      <section class="meeting-stage">
+        @if (ringingMessage()) {
+          <div class="stage-notice ringing-banner">{{ ringingMessage() }}</div>
+        }
+        @if (mediaError()) {
+          <p class="stage-notice media-error">{{ mediaError() }}</p>
+        }
+
+        <div class="video-grid" [attr.data-count]="tileCount() > 9 ? 'many' : tileCount()">
+          <article class="tile tile-local" [class.speaking]="isSpeaking(localParticipant()?.identity)">
+            <video #localVideo autoplay playsinline muted [class.video-hidden]="!cameraEnabled()"></video>
+            @if (!cameraEnabled()) {
+              <div class="tile-placeholder">
+                <span class="avatar">{{ initial(currentUsername()) }}</span>
+              </div>
+            }
+            <div class="tile-footer">
+              <span class="tile-name">You</span>
+              @if (!micEnabled()) {
+                <span class="mic-badge" title="Your mic is off">Muted</span>
+              }
+            </div>
+          </article>
+
+          @for (participant of remoteParticipants(); track trackByParticipantId($index, participant)) {
+            <article class="tile remote-tile" [class.speaking]="isSpeaking(participant.identity)">
+              <video
+                [srcObject]="getRemoteVideoStream(participant)"
+                autoplay
+                playsinline
+                [class.video-hidden]="!isRemoteCameraOn(participant)"
+              ></video>
+              <!-- Separate from the video element above: the video stream carries only the video
+                   track, and a participant with their camera off still needs to be heard. -->
+              <audio [srcObject]="getRemoteAudioStream(participant)" autoplay></audio>
+
+              @if (!isRemoteCameraOn(participant)) {
+                <div class="tile-placeholder">
+                  <span class="avatar">{{ initial(getParticipantName(participant)) }}</span>
+                </div>
+              }
+              <div class="tile-footer">
+                <span class="tile-name">{{ getParticipantName(participant) }}</span>
+                @if (!isRemoteMicOn(participant)) {
+                  <span class="mic-badge">Muted</span>
+                }
+              </div>
+            </article>
+          }
+        </div>
+
+        @if (!remoteParticipants().length) {
+          <div class="waiting-card">
+            <p>Waiting for others to join.</p>
+            <button type="button" class="primary" (click)="togglePanel('people')">Add people</button>
+          </div>
+        }
+      </section>
+
+      @if (panel()) {
+        <aside class="side-panel" [attr.aria-label]="panel() === 'chat' ? 'Chat' : 'People'">
+          <header class="panel-header">
+            <h3>{{ panel() === 'chat' ? 'Chat' : 'People' }}</h3>
+            <button type="button" class="icon-btn" (click)="closePanel()" aria-label="Close panel">✕</button>
+          </header>
+
+          @if (panel() === 'chat') {
+            <div class="chat-messages">
+              @if (!chatMessages().length) {
+                <p class="chat-empty">No messages yet. Say hi!</p>
+              }
+              @for (msg of chatMessages(); track trackByChatId($index, msg)) {
+                <div class="chat-message" [class.chat-mine]="isMyMessage(msg)">
+                  <div class="chat-meta">
+                    <span class="chat-sender">{{ msg.senderUsername }}</span>
+                    <span class="chat-time">{{ formatChatTime(msg.sentUtc) }}</span>
+                  </div>
+                  <div class="chat-text">{{ msg.text }}</div>
+                </div>
+              }
+            </div>
+
+            <form class="chat-input" (ngSubmit)="sendChat()">
+              <input
+                type="text"
+                name="chatDraft"
+                placeholder="Type a message..."
+                aria-label="Chat message"
+                [value]="chatDraft()"
+                (input)="chatDraft.set($any($event.target).value)"
+                maxlength="2000"
+              />
+              <button type="submit" class="primary" [disabled]="!chatDraft().trim()">Send</button>
+            </form>
+          } @else {
+            <div class="people-body">
+              <section class="people-group">
+                <h4>In this call ({{ tileCount() }})</h4>
+                <div class="person-row">
+                  <span class="avatar avatar-sm" aria-hidden="true">{{ initial(currentUsername()) }}</span>
+                  <div class="person-text">
+                    <span>{{ currentUsername() }} (you)</span>
+                  </div>
+                  @if (!micEnabled()) {
+                    <span class="mic-badge">Muted</span>
+                  }
+                </div>
+                @for (participant of remoteParticipants(); track participant.identity) {
+                  <div class="person-row">
+                    <span class="avatar avatar-sm" aria-hidden="true">{{ initial(getParticipantName(participant)) }}</span>
+                    <div class="person-text">
+                      <span>{{ getParticipantName(participant) }}</span>
+                    </div>
+                    @if (!isRemoteMicOn(participant)) {
+                      <span class="mic-badge">Muted</span>
+                    }
+                  </div>
+                }
+              </section>
+
+              <section class="people-group">
+                <h4>Add people</h4>
+                <input
+                  type="search"
+                  class="people-filter"
+                  placeholder="Search online users"
+                  aria-label="Search online users"
+                  [value]="peopleFilter()"
+                  (input)="peopleFilter.set($any($event.target).value)"
+                />
+
+                @if (!addableUsers().length) {
+                  <p class="empty">
+                    {{ peopleFilter() ? 'No online users match.' : 'No one else is online right now.' }}
+                  </p>
+                }
+
+                @for (user of addableUsers(); track user.id) {
+                  <div class="person-row">
+                    <span class="avatar avatar-sm" aria-hidden="true">{{ initial(user.username) }}</span>
+                    <div class="person-text">
+                      <span>{{ user.username }}</span>
+                      <small class="status" [class.busy]="user.isInCall">
+                        @switch (inviteStateFor(user)) {
+                          @case ('ringing') { Ringing... }
+                          @case ('declined') { Declined }
+                          @case ('failed') { Could not be reached }
+                          @default { {{ user.isInCall ? 'In another call' : 'Available' }} }
+                        }
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      class="primary add-btn"
+                      [disabled]="inviteStateFor(user) === 'ringing'"
+                      [attr.aria-label]="'Add ' + user.username + ' to the call'"
+                      (click)="addToCall(user)"
+                    >
+                      {{ inviteStateFor(user) === 'ringing' ? 'Ringing' : 'Add' }}
+                    </button>
+                  </div>
+                }
+              </section>
+            </div>
+          }
+        </aside>
       }
-    </aside>
-  </main>
+
+      <nav class="meeting-controls" aria-label="Call controls">
+        <button
+          type="button"
+          class="control-btn"
+          [class.off]="!isMicOn"
+          [attr.aria-label]="isMicOn ? 'Mic Off' : 'Mic On'"
+          [attr.aria-pressed]="!isMicOn"
+          (click)="toggleMic()"
+        >
+          <span class="control-icon" aria-hidden="true">{{ isMicOn ? '🎙' : '🔇' }}</span>
+          <span class="control-label">{{ isMicOn ? 'Mic Off' : 'Mic On' }}</span>
+        </button>
+        <button
+          type="button"
+          class="control-btn"
+          [class.off]="!isCameraOn"
+          [attr.aria-label]="isCameraOn ? 'Camera Off' : 'Camera On'"
+          [attr.aria-pressed]="!isCameraOn"
+          (click)="toggleCamera()"
+        >
+          <span class="control-icon" aria-hidden="true">{{ isCameraOn ? '📷' : '🚫' }}</span>
+          <span class="control-label">{{ isCameraOn ? 'Camera Off' : 'Camera On' }}</span>
+        </button>
+        <button
+          type="button"
+          class="control-btn"
+          [class.active]="panel() === 'people'"
+          aria-label="Add people"
+          [attr.aria-pressed]="panel() === 'people'"
+          (click)="togglePanel('people')"
+        >
+          <span class="control-icon" aria-hidden="true">👥</span>
+          <span class="control-label">Add people</span>
+        </button>
+        <button
+          type="button"
+          class="control-btn"
+          [class.active]="panel() === 'chat'"
+          aria-label="Chat"
+          [attr.aria-pressed]="panel() === 'chat'"
+          (click)="togglePanel('chat')"
+        >
+          <span class="control-icon" aria-hidden="true">💬</span>
+          <span class="control-label">Chat</span>
+        </button>
+        <button type="button" class="control-btn end-btn" aria-label="End Call" (click)="endCall()">
+          <span class="control-icon" aria-hidden="true">✆</span>
+          <span class="control-label">End Call</span>
+        </button>
+      </nav>
+    </div>
+  }
 </div>

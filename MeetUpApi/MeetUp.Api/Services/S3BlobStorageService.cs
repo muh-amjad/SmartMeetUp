@@ -83,6 +83,14 @@ public sealed class S3BlobStorageService : IBlobStorageService
     private static bool IsPlainHttp(string serviceUrl) =>
         serviceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
+    public async Task<Stream> OpenReadAsync(string key, CancellationToken ct)
+    {
+        // The internal client, not the presign one: this read happens inside the API process, which
+        // reaches storage over the private address even when no public one exists.
+        var response = await _client.GetObjectAsync(_options.BucketName, key, ct);
+        return response.ResponseStream;
+    }
+
     public async Task DeleteAsync(string key, CancellationToken ct)
     {
         try

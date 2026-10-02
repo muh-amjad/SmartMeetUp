@@ -6,15 +6,14 @@ using Microsoft.Extensions.Options;
 namespace MeetUp.Api.Services.Ai;
 
 /// <summary>
-/// Google text-embedding-004 via the generativelanguage REST API. Reuses the Gemini API key already
-/// configured for analysis, so enabling semantic search needs no extra credentials.
-/// Implemented against REST for the same reason as the analysis providers — a small, stable surface
-/// is cheaper to own than an SDK whose object shapes have to be reverse-engineered.
+/// Google Gemini embeddings (AiProviders:EmbeddingModel) via the generativelanguage REST API.
+/// Reuses the Gemini API key already configured for analysis, so enabling semantic search needs no
+/// extra credentials. Implemented against REST for the same reason as the analysis providers — a
+/// small, stable surface is cheaper to own than an SDK whose object shapes have to be reverse-engineered.
 /// </summary>
 public sealed class GeminiEmbeddingService : IEmbeddingService
 {
     private const string BaseUrl = "https://generativelanguage.googleapis.com/v1beta";
-    private const string Model = "text-embedding-004";
 
     /// <summary>Gemini caps batchEmbedContents at 100 requests per call.</summary>
     private const int MaxBatchSize = 100;
@@ -22,6 +21,7 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
     private readonly HttpClient _http;
     private readonly ILogger<GeminiEmbeddingService> _logger;
     private readonly string _apiKey;
+    private readonly string _model;
 
     public GeminiEmbeddingService(
         HttpClient http,
@@ -30,6 +30,7 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
     {
         _http = http;
         _logger = logger;
+        _model = aiProviders.Value.EmbeddingModel;
 
         // Any configured Gemini provider entry will do — they all carry the same Google API key.
         _apiKey = aiProviders.Value.Providers
@@ -62,14 +63,21 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
             {
                 requests = batch.Select(text => new
                 {
-                    model = $"models/{Model}",
+                    model = $"models/{_model}",
                     content = new { parts = new[] { new { text } } },
+                    // Newer models default to 3072 dimensions; the vector column is 768.
+                    outputDimensionality = Dimensions,
                 }).ToArray(),
             };
 
-            var url = $"{BaseUrl}/models/{Model}:batchEmbedContents?key={_apiKey}";
-            var response = await _http.PostAsJsonAsync(url, payload, ct);
-            response.EnsureSuccessStatusCode();
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/models/{_model}:batchEmbedContents")
+            {
+                Content = JsonContent.Create(payload),
+            };
+            request.Headers.Add("x-goog-api-key", _apiKey);
+
+            using var response = await _http.SendAsync(request, ct);
+            await AiHttp.EnsureSuccessAsync(response, $"Gemini embeddings ({_model})", ct);
 
             var body = await response.Content.ReadFromJsonAsync<BatchEmbedResponse>(cancellationToken: ct);
             var embeddings = body?.Embeddings ?? new List<EmbeddingValues>();
@@ -93,7 +101,7 @@ public sealed class GeminiEmbeddingService : IEmbeddingService
             }
         }
 
-        _logger.LogDebug("Embedded {Count} text(s) with {Model}", results.Count, Model);
+        _logger.LogDebug("Embedded {Count} text(s) with {Model}", results.Count, _model);
         return results;
     }
 

@@ -138,6 +138,9 @@ namespace MeetUp.Api
             {
                 var options = sp.GetRequiredService<IOptions<AssemblyAiOptions>>().Value;
                 client.BaseAddress = new Uri(options.BaseUrl);
+                // Recordings are video now, and with UploadRecordings on the whole file goes through
+                // this client. The 100s default cuts off any upload past a few minutes of meeting.
+                client.Timeout = TimeSpan.FromMinutes(30);
                 if (!string.IsNullOrWhiteSpace(options.ApiKey))
                 {
                     client.DefaultRequestHeaders.Add("Authorization", options.ApiKey);

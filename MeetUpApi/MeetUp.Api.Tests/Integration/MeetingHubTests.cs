@@ -1,6 +1,10 @@
+using MeetUp.Api.Data;
+using MeetUp.Api.Dtos;
 using MeetUp.Api.Dtos.Auth;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -201,7 +205,84 @@ public class MeetingHubTests : IClassFixture<CustomWebApplicationFactory>
         Assert.StartsWith("meeting-", root.GetProperty("roomName").GetString());
     }
 
+    [Fact]
+    public async Task ReportSpeakingIntervals_Is_Stored_For_A_Participant_Even_When_Presence_Was_Lost()
+    {
+        var host = await CreateUser("intervals-host");
+        var meetingId = await CreateMeeting(host.Token);
+
+        // No SetInCall: this is the state a reconnect or an API restart leaves a connection in —
+        // registered, but in no meeting as far as presence knows. Intervals reported then used to
+        // be dropped, and the speaker's transcript lines stayed "Speaker B".
+        await using var hub = BuildHubConnection(host.Token);
+        await StartAndJoin(hub);
+
+        var started = DateTime.UtcNow.AddSeconds(1);
+        await hub.InvokeAsync("ReportSpeakingIntervals", Guid.Parse(meetingId), new[]
+        {
+            new SpeakingIntervalDto { StartedUtc = started, StoppedUtc = started.AddSeconds(2) },
+        });
+
+        Assert.Equal(1, await CountSpeakingIntervals(meetingId));
+    }
+
+    [Fact]
+    public async Task ReportSpeakingIntervals_Is_Ignored_For_Someone_Who_Is_Not_A_Participant()
+    {
+        var host = await CreateUser("intervals-owner");
+        var outsider = await CreateUser("intervals-outsider");
+        var meetingId = await CreateMeeting(host.Token);
+
+        await using var hub = BuildHubConnection(outsider.Token);
+        await StartAndJoin(hub);
+
+        var started = DateTime.UtcNow.AddSeconds(1);
+        await hub.InvokeAsync("ReportSpeakingIntervals", Guid.Parse(meetingId), new[]
+        {
+            new SpeakingIntervalDto { StartedUtc = started, StoppedUtc = started.AddSeconds(2) },
+        });
+
+        Assert.Equal(0, await CountSpeakingIntervals(meetingId));
+    }
+
+    [Fact]
+    public async Task InviteToMeeting_Is_Refused_When_The_Caller_Is_Not_In_That_Meeting()
+    {
+        var host = await CreateUser("invite-owner");
+        var outsider = await CreateUser("invite-outsider");
+        var callee = await CreateUser("invite-target");
+        var meetingId = await CreateMeeting(host.Token);
+
+        var calleeIncoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outsiderFailed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var outsiderHub = BuildHubConnection(outsider.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => calleeIncoming.TrySetResult(payload.Clone()));
+        outsiderHub.On<string>("CallFailed", message => outsiderFailed.TrySetResult(message));
+
+        await StartAndJoin(outsiderHub);
+        await StartAndJoin(calleeHub);
+
+        await outsiderHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+
+        var message = await AwaitWithTimeout(outsiderFailed.Task, "Outsider was not told the invite failed.");
+        Assert.Contains("not part of this meeting", message);
+
+        var completed = await Task.WhenAny(calleeIncoming.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.NotSame(calleeIncoming.Task, completed);
+    }
+
     // ────────────── helpers ──────────────
+
+    private async Task<int> CountSpeakingIntervals(string meetingId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var id = Guid.Parse(meetingId);
+        return await db.ParticipantAudioActivities.CountAsync(a => a.MeetingId == id);
+    }
 
     private async Task<string> CreateMeeting(string bearerToken)
     {

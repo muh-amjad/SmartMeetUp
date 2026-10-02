@@ -65,7 +65,10 @@ public class MeetingsApiTests : IClassFixture<CustomWebApplicationFactory>
         Assert.Equal("Detail me", detail.Title);
         Assert.True(detail.IsHost);
         Assert.Equal(host.Username, detail.HostUsername);
-        Assert.Empty(detail.Participants);   // no participant_joined webhook fired
+        // Creating a meeting records the host as a participant straight away, rather than waiting for
+        // LiveKit's participant_joined webhook (which never fires here).
+        var participant = Assert.Single(detail.Participants);
+        Assert.Equal(host.Username, participant.Username);
     }
 
     [Fact]

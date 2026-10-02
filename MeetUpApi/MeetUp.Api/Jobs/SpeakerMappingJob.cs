@@ -55,7 +55,7 @@ public sealed class SpeakerMappingJob : ISpeakerMappingJob
         // Without the intervals we can still report totals, just not who said what.
         if (activity.Count > 0)
         {
-            var resolved = AssignLabelsToUsers(utterances, activity);
+            var resolved = AssignLabelsToUsers(utterances, AlignToRecording(meeting, activity), participants);
 
             foreach (var utterance in utterances)
             {
@@ -88,13 +88,57 @@ public sealed class SpeakerMappingJob : ISpeakerMappingJob
     }
 
     /// <summary>
+    /// Moves the reported speaking intervals onto the transcript's timeline.
+    ///
+    /// Intervals are stored relative to the meeting's start (see MeetingHub.ReportSpeakingIntervals),
+    /// but transcript timestamps count from the first frame of the recording. Those are not the same
+    /// moment: the room is created before anyone joins, and the recorder only starts once media is
+    /// flowing, so the recording begins seconds later. Left uncorrected, every interval sits that
+    /// many seconds late against the utterances — enough, with short alternating turns, to match a
+    /// label to the wrong person or to nobody, leaving it as "Speaker B".
+    ///
+    /// Meetings recorded before the recording start was captured are returned unchanged.
+    /// </summary>
+    private static IReadOnlyList<ParticipantAudioActivity> AlignToRecording(
+        Meeting meeting,
+        IReadOnlyList<ParticipantAudioActivity> activity)
+    {
+        if (meeting.RecordingStartedUtc is not { } recordingStarted)
+        {
+            return activity;
+        }
+
+        var origin = meeting.ActualStartUtc ?? meeting.CreatedUtc;
+        var offsetMs = (int)(recordingStarted - origin).TotalMilliseconds;
+        if (offsetMs == 0)
+        {
+            return activity;
+        }
+
+        // Copies, not the tracked entities: shifting those in place would persist the shifted
+        // values on the save below and double-shift them if the job is ever re-run.
+        return activity
+            .Select(a => new ParticipantAudioActivity
+            {
+                Id = a.Id,
+                MeetingId = a.MeetingId,
+                UserId = a.UserId,
+                StartedSpeakingMs = a.StartedSpeakingMs - offsetMs,
+                StoppedSpeakingMs = a.StoppedSpeakingMs - offsetMs,
+            })
+            .ToList();
+    }
+
+    /// <summary>
     /// For each speaker label, picks the participant whose reported speaking time overlaps that
     /// label's utterances the most. A label with no overlap at all is left unassigned rather than
-    /// guessed at, and two labels never collapse onto the same person.
+    /// guessed at, and two labels never collapse onto the same person — with one exception: when
+    /// exactly one label and exactly one participant are left over, they can only belong together.
     /// </summary>
     private static Dictionary<string, string> AssignLabelsToUsers(
         IReadOnlyList<TranscriptUtterance> utterances,
-        IReadOnlyList<ParticipantAudioActivity> activity)
+        IReadOnlyList<ParticipantAudioActivity> activity,
+        IReadOnlyList<MeetingParticipant> participants)
     {
         var activityByUser = activity
             .GroupBy(a => a.UserId)
@@ -139,6 +183,21 @@ public sealed class SpeakerMappingJob : ISpeakerMappingJob
 
             assignment[label] = userId;
             takenUsers.Add(userId);
+        }
+
+        // Resolve by elimination. A participant's intervals can be missing entirely (their client
+        // never reported, or reported with a skewed clock), which leaves their label with no overlap.
+        // In a 1:1 call that is the common case, and the answer is not in doubt.
+        var unassignedLabels = labels.Where(l => !assignment.ContainsKey(l)).ToList();
+        var unassignedUsers = participants
+            .Select(p => p.UserId)
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !takenUsers.Contains(id))
+            .ToList();
+
+        if (unassignedLabels.Count == 1 && unassignedUsers.Count == 1)
+        {
+            assignment[unassignedLabels[0]] = unassignedUsers[0];
         }
 
         return assignment;

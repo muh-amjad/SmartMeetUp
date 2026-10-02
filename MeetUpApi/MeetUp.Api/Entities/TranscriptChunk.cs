@@ -23,7 +23,7 @@ public class TranscriptChunk
     public int StartMs { get; set; }
     public int EndMs { get; set; }
 
-    /// <summary>768-dimension Gemini text-embedding-004 vector. Null until the embedding job runs.</summary>
+    /// <summary>768-dimension Gemini embedding (AiProviders:EmbeddingModel). Null until the embedding job runs.</summary>
     public Vector? Embedding { get; set; }
 
     /// <summary>

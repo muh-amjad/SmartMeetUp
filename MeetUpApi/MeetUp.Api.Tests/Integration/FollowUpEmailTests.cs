@@ -256,6 +256,13 @@ public class FollowUpEmailTests : IClassFixture<CustomWebApplicationFactory>
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+        // Creating a meeting already records its host as a participant, and (MeetingId, UserId) is
+        // unique — so adding the host again here failed every test that did, before it ran.
+        if (await db.MeetingParticipants.AnyAsync(p => p.MeetingId == meetingId && p.UserId == userId))
+        {
+            return;
+        }
+
         db.MeetingParticipants.Add(new MeetingParticipant
         {
             Id = Guid.NewGuid(),

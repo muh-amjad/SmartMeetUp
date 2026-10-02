@@ -92,14 +92,19 @@ public sealed class LiveKitService : ILiveKitService
         var request = new RoomCompositeEgressRequest
         {
             RoomName = roomName,
-            AudioOnly = true,
-            // OGG container defaults to Opus audio — no separate codec field needed
-            // for the audio-only room-composite request itself.
+            // Video and audio. The recording used to be audio-only (.ogg), so playback had sound
+            // but never any picture. "grid" tiles every participant, including anyone added
+            // mid-call, and falls back to a single full-frame tile in a 1:1 call.
+            Layout = "grid",
+            // 720p rather than the 1080p default: room composite renders through headless Chrome
+            // and encodes in software, and 720p roughly halves the CPU that costs — which matters
+            // on a small VM. Transcription only reads the audio track, so it is unaffected.
+            Preset = EncodingOptionsPreset.H264720P30,
             FileOutputs =
             {
                 new EncodedFileOutput
                 {
-                    FileType = EncodedFileType.Ogg,
+                    FileType = EncodedFileType.Mp4,
                     Filepath = outputKey,
                     S3 = new S3Upload
                     {

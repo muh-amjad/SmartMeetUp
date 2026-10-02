@@ -44,6 +44,30 @@ public sealed class AssemblyAiClient : IAssemblyAiClient
         return result.Id;
     }
 
+    public async Task<string> UploadAsync(Stream media, CancellationToken ct)
+    {
+        using var content = new StreamContent(media);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+        var response = await _httpClient.PostAsync("/v2/upload", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        var result = await response.Content.ReadFromJsonAsync<AssemblyAiUploadResult>(cancellationToken: ct);
+        if (string.IsNullOrWhiteSpace(result?.UploadUrl))
+        {
+            throw new InvalidOperationException("AssemblyAI returned no upload_url.");
+        }
+
+        _logger.LogInformation("Uploaded recording to AssemblyAI storage");
+        return result.UploadUrl;
+    }
+
+    private sealed class AssemblyAiUploadResult
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("upload_url")]
+        public string? UploadUrl { get; set; }
+    }
+
     public async Task<AssemblyAiTranscriptResult> GetTranscriptAsync(string transcriptId, CancellationToken ct)
     {
         var response = await _httpClient.GetAsync($"/v2/transcript/{transcriptId}", ct);

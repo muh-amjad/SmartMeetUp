@@ -23,6 +23,14 @@ public class Meeting
     public string? RecordingBlobKey { get; set; }
     public int? RecordingDurationSeconds { get; set; }
 
+    /// <summary>
+    /// When the recording file actually began, as reported by Egress. Transcript timestamps are
+    /// relative to this moment, which is usually several seconds after <see cref="ActualStartUtc"/>
+    /// (the room exists before anyone joins, and the recorder needs time to start), so speaker
+    /// matching uses it to line up client-reported speaking times with the transcript.
+    /// </summary>
+    public DateTime? RecordingStartedUtc { get; set; }
+
     // AI analysis: the provider is frozen at meeting-creation time so that changing your
     // preference later doesn't retroactively affect meetings already in flight.
     public string? AnalysisProviderRequested { get; set; }

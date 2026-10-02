@@ -116,6 +116,130 @@ public class SpeakerMappingTests : IClassFixture<CustomWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Assigns_The_Last_Label_By_Elimination_When_One_Participant_Reported_No_Activity()
+    {
+        var caller = await CreateUser("map-caller");
+        var invitee = await CreateUser("map-invitee");
+        var meetingId = await CreateMeeting(caller.Token, "Invitee reported nothing");
+
+        // The production failure: the invitee's client never reported speaking intervals, so only
+        // the caller's label has any overlap. With one label and one person left, B is the invitee.
+        await SeedAsync(meetingId, seed =>
+        {
+            seed.AddParticipant(caller.UserId);
+            seed.AddParticipant(invitee.UserId);
+
+            seed.AddUtterance("A", 0, 4_000, "Can you send the report?");
+            seed.AddUtterance("B", 4_000, 8_000, "Yes, by Friday.");
+
+            seed.AddActivity(caller.UserId, 0, 4_000);
+        });
+
+        await RunJobAsync(meetingId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var utterances = await db.TranscriptUtterances
+            .Where(u => u.Transcript!.MeetingId == meetingId)
+            .OrderBy(u => u.StartMs)
+            .ToListAsync();
+
+        Assert.Equal(caller.UserId, utterances[0].ParticipantUserId);
+        Assert.Equal(invitee.UserId, utterances[1].ParticipantUserId);
+    }
+
+    [Fact]
+    public async Task Lines_Up_Speaking_Intervals_With_The_Recording_Start()
+    {
+        var alice = await CreateUser("map-late-alice");
+        var bob = await CreateUser("map-late-bob");
+        var carol = await CreateUser("map-late-carol");
+        var meetingId = await CreateMeeting(alice.Token, "Recorder started late");
+
+        // The recorder began 4s after the meeting did, so the transcript's zero is 4s into the
+        // meeting. Speakers take 4s turns in order: alice, bob, carol, alice, bob, carol.
+        await SetRecordingDelayAsync(meetingId, TimeSpan.FromSeconds(4));
+
+        await SeedAsync(meetingId, seed =>
+        {
+            seed.AddParticipant(alice.UserId);
+            seed.AddParticipant(bob.UserId);
+            seed.AddParticipant(carol.UserId);
+
+            // Transcript time, counted from the start of the recording.
+            seed.AddUtterance("A", 0, 4_000, "Morning, everyone.");
+            seed.AddUtterance("B", 4_000, 8_000, "Morning.");
+            seed.AddUtterance("C", 8_000, 12_000, "Hi all.");
+            seed.AddUtterance("A", 12_000, 16_000, "Shall we start?");
+            seed.AddUtterance("B", 16_000, 20_000, "Yes.");
+            seed.AddUtterance("C", 20_000, 24_000, "Go ahead.");
+
+            // Reported time, counted from the start of the meeting: every turn sits 4s later.
+            // Matched without correcting for that, each label overlaps the *next* speaker's turn,
+            // and all three names come out rotated onto the wrong person.
+            seed.AddActivity(alice.UserId, 4_000, 8_000);
+            seed.AddActivity(alice.UserId, 16_000, 20_000);
+            seed.AddActivity(bob.UserId, 8_000, 12_000);
+            seed.AddActivity(bob.UserId, 20_000, 24_000);
+            seed.AddActivity(carol.UserId, 12_000, 16_000);
+            seed.AddActivity(carol.UserId, 24_000, 28_000);
+        });
+
+        await RunJobAsync(meetingId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var byLabel = await db.TranscriptUtterances
+            .Where(u => u.Transcript!.MeetingId == meetingId)
+            .GroupBy(u => u.SpeakerLabel)
+            .Select(g => new { Label = g.Key, UserId = g.First().ParticipantUserId })
+            .ToDictionaryAsync(x => x.Label, x => x.UserId);
+
+        Assert.Equal(alice.UserId, byLabel["A"]);
+        Assert.Equal(bob.UserId, byLabel["B"]);
+        Assert.Equal(carol.UserId, byLabel["C"]);
+    }
+
+    [Fact]
+    public async Task Does_Not_Guess_When_More_Than_One_Label_Is_Left_Unmatched()
+    {
+        var host = await CreateUser("map-ambig-host");
+        var second = await CreateUser("map-ambig-two");
+        var third = await CreateUser("map-ambig-three");
+        var meetingId = await CreateMeeting(host.Token, "Two silent reporters");
+
+        // B and C both lack activity and two people are left: elimination can't tell them apart.
+        await SeedAsync(meetingId, seed =>
+        {
+            seed.AddParticipant(host.UserId);
+            seed.AddParticipant(second.UserId);
+            seed.AddParticipant(third.UserId);
+
+            seed.AddUtterance("A", 0, 3_000, "Let us start.");
+            seed.AddUtterance("B", 3_000, 6_000, "Sounds good.");
+            seed.AddUtterance("C", 6_000, 9_000, "Agreed.");
+
+            seed.AddActivity(host.UserId, 0, 3_000);
+        });
+
+        await RunJobAsync(meetingId);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var utterances = await db.TranscriptUtterances
+            .Where(u => u.Transcript!.MeetingId == meetingId)
+            .OrderBy(u => u.StartMs)
+            .ToListAsync();
+
+        Assert.Equal(host.UserId, utterances[0].ParticipantUserId);
+        Assert.Null(utterances[1].ParticipantUserId);
+        Assert.Null(utterances[2].ParticipantUserId);
+    }
+
+    [Fact]
     public async Task Leaves_Speakers_Anonymous_But_Still_Reports_Totals_When_No_Activity_Was_Captured()
     {
         var host = await CreateUser("map-noactivity");
@@ -187,6 +311,20 @@ public class SpeakerMappingTests : IClassFixture<CustomWebApplicationFactory>
         await job.RunAsync(meetingId, CancellationToken.None);
     }
 
+    /// <summary>Pins the meeting's start and makes the recording begin <paramref name="delay"/> later.</summary>
+    private async Task SetRecordingDelayAsync(Guid meetingId, TimeSpan delay)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var meeting = await db.Meetings.SingleAsync(m => m.Id == meetingId);
+        var started = DateTime.UtcNow;
+        meeting.ActualStartUtc = started;
+        meeting.RecordingStartedUtc = started + delay;
+
+        await db.SaveChangesAsync();
+    }
+
     private async Task SeedAsync(Guid meetingId, Action<Seeder> configure)
     {
         using var scope = _factory.Services.CreateScope();
@@ -206,9 +344,16 @@ public class SpeakerMappingTests : IClassFixture<CustomWebApplicationFactory>
 
         transcript.FullText = string.Join(' ', seeder.Utterances.Select(u => u.Text));
 
+        // Creating a meeting already records its host as a participant, and (MeetingId, UserId) is
+        // unique — so seeding the host again failed every test here before the job even ran.
+        var existing = await db.MeetingParticipants
+            .Where(p => p.MeetingId == meetingId)
+            .Select(p => p.UserId)
+            .ToListAsync();
+
         db.Transcripts.Add(transcript);
         db.TranscriptUtterances.AddRange(seeder.Utterances);
-        db.MeetingParticipants.AddRange(seeder.Participants);
+        db.MeetingParticipants.AddRange(seeder.Participants.Where(p => !existing.Contains(p.UserId)));
         db.ParticipantAudioActivities.AddRange(seeder.Activities);
 
         await db.SaveChangesAsync();

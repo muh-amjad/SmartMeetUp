@@ -15,4 +15,13 @@ public sealed class AnalysisProviderFactory : IAnalysisProviderFactory
         _registry.Find(requested)
         ?? _registry.Find(userPreference)
         ?? GetDefault();
+
+    public IReadOnlyList<IAnalysisProvider> GetFallbacks(string failedKey) =>
+        _registry.GetAvailable()
+            .Where(p => !string.Equals(p.Key, failedKey, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(p => p.IsDefault)
+            .ThenByDescending(p => p.IsFree)
+            .Select(p => _registry.Find(p.Key))
+            .OfType<IAnalysisProvider>()
+            .ToList();
 }

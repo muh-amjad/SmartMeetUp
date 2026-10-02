@@ -66,8 +66,16 @@ public sealed class EgressInfoDto
     [JsonPropertyName("roomName")]
     public string RoomName { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Protobuf enum name, e.g. "EGRESS_COMPLETE" or "EGRESS_ABORTED". Protobuf JSON omits default
+    /// values, so the first enum member (EGRESS_STARTING) arrives as an empty string.
+    /// </summary>
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
+
+    /// <summary>Why the recording failed or was aborted, e.g. "Start signal not received".</summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; set; }
 
     /// <summary>One entry per configured file output — we only ever configure one (the room recording).</summary>
     [JsonPropertyName("fileResults")]
@@ -83,4 +91,13 @@ public sealed class EgressFileResultDto
     [JsonPropertyName("duration")]
     [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public long DurationNanoseconds { get; set; }
+
+    /// <summary>Unix nanoseconds when this file's recording began — the transcript's zero point.</summary>
+    [JsonPropertyName("startedAt")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long StartedAtNanoseconds { get; set; }
+
+    [JsonPropertyName("size")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+    public long SizeBytes { get; set; }
 }

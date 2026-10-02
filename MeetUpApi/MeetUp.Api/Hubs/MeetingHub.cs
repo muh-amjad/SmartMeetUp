@@ -20,6 +20,7 @@ public class MeetingHub : Hub
     private readonly IPresenceTracker _presenceTracker;
     private readonly IChatMessageRepository _chatMessageRepository;
     private readonly IMeetingRepository _meetingRepository;
+    private readonly IMeetingParticipantRepository _participantRepository;
     private readonly IMeetingAnalyticsRepository _analyticsRepository;
     private readonly ILogger<MeetingHub> _logger;
 
@@ -31,12 +32,14 @@ public class MeetingHub : Hub
     IPresenceTracker presenceTracker,
     IChatMessageRepository chatMessageRepository,
     IMeetingRepository meetingRepository,
+    IMeetingParticipantRepository participantRepository,
     IMeetingAnalyticsRepository analyticsRepository,
     ILogger<MeetingHub> logger)
     {
         _presenceTracker = presenceTracker;
         _chatMessageRepository = chatMessageRepository;
         _meetingRepository = meetingRepository;
+        _participantRepository = participantRepository;
         _analyticsRepository = analyticsRepository;
         _logger = logger;
     }
@@ -87,8 +90,9 @@ public class MeetingHub : Hub
     }
 
     /// <summary>
-    /// Sends an invite from the caller to a target participant.
-    /// The caller has already created the meeting via POST /api/meetings and holds its id.
+    /// Sends an invite from the caller to a target participant. Used both to start a call (the
+    /// caller has just created the meeting) and to add someone to a call already in progress —
+    /// the invite always names an existing meeting, and the invitee joins that same room.
     /// </summary>
     /// <param name="targetConnectionId">Invitee's current SignalR connection id.</param>
     /// <param name="meetingId">The meeting to invite them to.</param>
@@ -104,6 +108,32 @@ public class MeetingHub : Hub
         if (!_presenceTracker.TryGetUser(targetConnectionId, out var callee))
         {
             await Clients.Client(callerConnectionId).SendAsync("CallFailed", "User is no longer available.");
+            return;
+        }
+
+        // Only someone who is part of the meeting can bring others into it. Without this, any
+        // signed-in user who learned a meeting id could pull people into a call they are not in.
+        var ct = Context.ConnectionAborted;
+        var meeting = await _meetingRepository.GetByIdAsync(meetingId, ct);
+        if (meeting is null || meeting.EndedUtc.HasValue || meeting.Status == MeetingStatus.Ended)
+        {
+            await Clients.Client(callerConnectionId).SendAsync("CallFailed", "This meeting has already ended.");
+            return;
+        }
+
+        if (await _participantRepository.GetByMeetingAndUserAsync(meetingId, caller.AppUserId, ct) is null)
+        {
+            _logger.LogWarning(
+                "InviteToMeeting rejected: user {UserId} is not a participant of meeting {MeetingId}",
+                caller.AppUserId, meetingId);
+            await Clients.Client(callerConnectionId).SendAsync("CallFailed", "You are not part of this meeting.");
+            return;
+        }
+
+        if (string.Equals(callee.RoomId, meetingId.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            await Clients.Client(callerConnectionId).SendAsync(
+                "CallFailed", $"{callee.Username} is already in this call.");
             return;
         }
 
@@ -195,6 +225,15 @@ public class MeetingHub : Hub
         if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var user))
         {
             return;
+        }
+
+        // Switching straight from one call to another (accepting an invite while already in a
+        // call) never passes through SetLeftCall, so drop the old meeting's group here — otherwise
+        // this connection keeps receiving the previous meeting's chat.
+        if (Guid.TryParse(user.RoomId, out var previousMeetingGuid)
+            && !string.Equals(user.RoomId, meetingId, StringComparison.OrdinalIgnoreCase))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(previousMeetingGuid));
         }
 
         user.IsInCall = true;
@@ -305,6 +344,13 @@ public class MeetingHub : Hub
     ///
     /// Intervals are always attributed to the authenticated caller, never to an id they supply,
     /// so a client cannot fabricate speaking time for someone else.
+    ///
+    /// Membership is checked against the meeting's participant list in the database, not against
+    /// in-memory presence. Presence is rebuilt from scratch whenever a connection reconnects or the
+    /// API restarts, and for a while afterwards the caller looks like they are in no meeting at all.
+    /// Gating on it silently threw away every interval reported in that window — for whole calls,
+    /// whenever it happened early — which is how one participant's lines stayed "Speaker B" while
+    /// everyone else's were named. The participant row is written on join and survives all of that.
     /// </summary>
     public async Task ReportSpeakingIntervals(Guid meetingId, SpeakingIntervalDto[] intervals)
     {
@@ -313,21 +359,21 @@ public class MeetingHub : Hub
             return;
         }
 
-        if (!_presenceTracker.TryGetUser(Context.ConnectionId, out var user))
+        var userId = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(userId))
         {
-            return;
-        }
-
-        // Caller must currently be in this meeting — same rule as chat.
-        if (!string.Equals(user.RoomId, meetingId.ToString(), StringComparison.Ordinal))
-        {
-            _logger.LogWarning(
-                "ReportSpeakingIntervals rejected: user {UserId} not in meeting {MeetingId}",
-                user.AppUserId, meetingId);
             return;
         }
 
         var ct = Context.ConnectionAborted;
+
+        if (await _participantRepository.GetByMeetingAndUserAsync(meetingId, userId, ct) is null)
+        {
+            _logger.LogWarning(
+                "ReportSpeakingIntervals rejected: user {UserId} is not a participant of meeting {MeetingId}",
+                userId, meetingId);
+            return;
+        }
 
         var meeting = await _meetingRepository.GetByIdAsync(meetingId, ct);
         if (meeting is null)
@@ -355,7 +401,7 @@ public class MeetingHub : Hub
             {
                 Id = Guid.NewGuid(),
                 MeetingId = meetingId,
-                UserId = user.AppUserId,
+                UserId = userId,
                 StartedSpeakingMs = startMs,
                 StoppedSpeakingMs = stopMs,
             });
@@ -370,6 +416,6 @@ public class MeetingHub : Hub
         await _analyticsRepository.SaveChangesAsync(ct);
 
         _logger.LogDebug("Recorded {Count} speaking interval(s) for user {UserId} in meeting {MeetingId}",
-            rows.Count, user.AppUserId, meetingId);
+            rows.Count, userId, meetingId);
     }
 }

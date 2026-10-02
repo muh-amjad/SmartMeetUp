@@ -4,12 +4,15 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   effect,
   ElementRef,
   inject,
   OnDestroy,
   OnInit,
   signal,
+  untracked,
+  viewChild,
   ViewChild,
 } from '@angular/core';
 import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
@@ -23,9 +26,19 @@ import { AuthService } from '../../services/auth.service';
 import { LivekitMeetingService } from '../../services/livekit-meeting.service';
 import { MeetingApiService } from '../../services/meeting-api.service';
 import { SignalrService } from '../../services/signalr.service';
+import { ToastService } from '../../services/toast.service';
 import { UserDirectoryService } from '../../services/user-directory.service';
 import { UsersFacade } from '../../store/facades/users.facade';
 import { ChatMessageDto } from '../../dtos/meetings/chat-message.dto';
+
+/** Where an invite sent from inside a call stands, per invited user. */
+type InviteState = 'ringing' | 'declined' | 'failed';
+
+/** The single side panel open next to the video grid — one at a time keeps mobile usable. */
+type CallPanel = 'chat' | 'people';
+
+/** How long an unanswered invite shows as ringing before it can be sent again. */
+const InviteRingTimeoutMs = 45_000;
 
 @Component({
   selector: 'app-meetup-home',
@@ -42,6 +55,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   private readonly userDirectoryService = inject(UserDirectoryService);
   private readonly livekit = inject(LivekitMeetingService);
   private readonly meetingApi = inject(MeetingApiService);
+  private readonly toast = inject(ToastService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   private readonly fb = inject(FormBuilder);
@@ -76,17 +90,63 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   readonly remoteParticipants = this.livekit.remoteParticipants;
   readonly localParticipant = this.livekit.localParticipant;
   readonly currentMeetingId = this.livekit.currentMeetingId;
+  readonly currentMeetingTitle = this.livekit.currentMeetingTitle;
   readonly isRecording = this.livekit.isRecording;
-    readonly chatMessages = signal<ChatMessageDto[]>([]);
+  readonly cameraEnabled = this.livekit.cameraEnabled;
+  readonly micEnabled = this.livekit.micEnabled;
+  readonly activeSpeakerIds = this.livekit.activeSpeakerIds;
+
+  readonly chatMessages = signal<ChatMessageDto[]>([]);
   readonly chatDraft = signal('');
-  readonly chatOpen = signal(true);   // toggle chat panel visibility
+
+  /** Chat starts open where there is room beside the video; on a phone it would cover it. */
+  readonly panel = signal<CallPanel | null>(this.isWideScreen() ? 'chat' : null);
+
+  readonly inCall = computed(() => !!this.currentMeetingId());
+
+  /** Everyone on screen: you plus each remote participant. Drives the grid's shape. */
+  readonly tileCount = computed(() => this.remoteParticipants().length + 1);
 
   readonly onlineUsers = computed(() => {
     const myConnectionId = this.currentUserConnectionId();
     return this.allUsers().filter((u) => u.id !== myConnectionId);
   });
 
+  /** Invites sent from this call, keyed by the invitee's connection id. */
+  readonly inviteStates = signal<ReadonlyMap<string, InviteState>>(new Map());
+  readonly peopleFilter = signal('');
+
+  /**
+   * Online users who could be added to the current call: not you (on any device) and not already
+   * in this meeting. Anyone free comes first; people in another call can still be invited and
+   * decide for themselves whether to switch.
+   */
+  readonly addableUsers = computed(() => {
+    const meetingId = this.currentMeetingId()?.toLowerCase();
+    const myIdentity = this.localParticipant()?.identity;
+    const filter = this.peopleFilter().trim().toLowerCase();
+
+    return this.onlineUsers()
+      .filter((u) => !myIdentity || u.appUserId !== myIdentity)
+      .filter((u) => !meetingId || (u.roomId ?? '').toLowerCase() !== meetingId)
+      .filter(
+        (u) =>
+          !filter ||
+          u.username.toLowerCase().includes(filter) ||
+          (u.email ?? '').toLowerCase().includes(filter),
+      )
+      .sort((a, b) => Number(a.isInCall) - Number(b.isInCall) || a.username.localeCompare(b.username));
+  });
+
   private isEndingCall = false;
+
+  /** The meeting this client created for a 1:1 call, so a decline can end it if nobody came. */
+  private startedMeetingId: string | null = null;
+
+  /** Who the most recent in-call invite went to; CallFailed does not say. */
+  private lastInviteTarget: string | null = null;
+
+  private readonly inviteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private remoteStreamCache = new Map<string, { stream: MediaStream; trackId: string }>();
 
@@ -98,23 +158,48 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('pageShell', { static: true })
   pageShellRef!: ElementRef<HTMLElement>;
 
-  @ViewChild('localVideo')
-  localVideoRef?: ElementRef<HTMLVideoElement>;
+  /**
+   * A signal rather than @ViewChild: the self-view only exists while in a call, so it appears after
+   * the first render. The effect below re-runs when it does — a plain ViewChild would leave the
+   * effect looking at `undefined` and the self-view would stay black.
+   */
+  private readonly localVideoRef = viewChild<ElementRef<HTMLVideoElement>>('localVideo');
 
   constructor() {
-    // Re-attach local video element whenever LiveKit publishes a new local track.
+    // Attach the local camera to the self-view whenever either side changes.
     effect(() => {
+      const el = this.localVideoRef()?.nativeElement;
       const lp = this.localParticipant();
-      const el = this.localVideoRef?.nativeElement;
-      if (lp && el) {
-        const track = lp
-          .getTrackPublications()
-          .find((pub) => pub.kind === 'video' && !pub.isMuted)?.videoTrack;
-        if (track) {
-          track.attach(el);
-        }
+      this.livekit.localTrackVersion();
+      const cameraOn = this.cameraEnabled();
+
+      if (!el || !lp || !cameraOn) {
+        return;
       }
+      const track = lp
+        .getTrackPublications()
+        .find((pub) => pub.kind === 'video' && !pub.isMuted)?.videoTrack;
+      track?.attach(el);
     });
+
+    // A new meeting starts with a clean slate of invites.
+    effect(() => {
+      this.currentMeetingId();
+      untracked(() => this.clearInviteStates());
+    });
+
+    // On a narrow upright screen the panel is a sheet over the video. Close it when the screen
+    // becomes one (a phone rotated upright, a window narrowed) so the call is not left hidden.
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      const narrowPortrait = window.matchMedia('(max-width: 900px) and (orientation: portrait)');
+      const onChange = (e: MediaQueryListEvent) => {
+        if (e.matches) {
+          this.panel.set(null);
+        }
+      };
+      narrowPortrait.addEventListener('change', onChange);
+      inject(DestroyRef).onDestroy(() => narrowPortrait.removeEventListener('change', onChange));
+    }
   }
 
   async ngOnInit(): Promise<void> {
@@ -153,13 +238,16 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
 
   ngAfterViewInit(): void {
     const shell = this.pageShellRef.nativeElement;
-    gsap.from(shell.querySelectorAll('.top-bar, .search-panel, .content-section, .users-section'), {
-      opacity: 0,
-      y: 22,
-      duration: 0.8,
-      stagger: 0.1,
-      ease: 'power3.out',
-    });
+    const lobby = shell.querySelectorAll('.top-bar, .search-panel, .users-section');
+    if (lobby.length) {
+      gsap.from(lobby, {
+        opacity: 0,
+        y: 22,
+        duration: 0.8,
+        stagger: 0.1,
+        ease: 'power3.out',
+      });
+    }
   }
 
   ngOnDestroy(): void {
@@ -168,6 +256,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
       void this.signalRService.setLeftCall();
     }
 
+    this.clearInviteStates();
     this.signalRService.setCallbacks({});
   }
 
@@ -198,7 +287,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
 
   callSearchedUser(result: UserSearchResultDto): void {
     if (!result.isOnline || !result.connectionId) {
-      window.alert('This user is currently offline.');
+      this.toast.info(`${result.username} is currently offline.`);
       return;
     }
 
@@ -208,31 +297,75 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
-   * Start a call to another online user.
-   * 1. Create a meeting via REST (get meetingId + token for us).
-   * 2. Send an invite via SignalR (server routes it to the target's connection).
-   * 3. Join the LiveKit room ourselves so we're already there when they accept.
+   * Calls another online user. Inside a call this adds them to it; otherwise it starts a new one.
+   *
+   * It used to always create a fresh meeting and join it — so calling a third person from inside a
+   * call silently pulled the caller out of the call they were in and into a new one alone with the
+   * invitee, leaving the other participant behind.
    */
   async callUser(user: User): Promise<void> {
+    if (this.currentMeetingId()) {
+      await this.addToCall(user);
+      return;
+    }
+
     try {
       this.ringingMessage.set(`Ringing ${user.username}...`);
       const meeting = await firstValueFrom(this.meetingApi.create());
+      this.startedMeetingId = meeting.meetingId;
       await this.signalRService.inviteToMeeting(user.id, meeting.meetingId);
 
-      // Already in the room, so join the new meeting directly.
       await this.livekit.joinMeeting(meeting.meetingId);
       await this.signalRService.setInCall(meeting.meetingId);
       await this.loadChatHistory(meeting.meetingId);
     } catch (err) {
       this.ringingMessage.set('');
+      this.startedMeetingId = null;
       this.mediaError.set('Could not start the call.');
       console.error('callUser failed', err);
     }
   }
 
+  /**
+   * Invites an online user into the meeting already in progress. They receive the same invite as
+   * for a new call, and accepting joins them to this room — so recording, transcription and
+   * analysis cover them like everyone else, with no extra wiring.
+   */
+  async addToCall(user: User): Promise<void> {
+    const meetingId = this.currentMeetingId();
+    if (!meetingId || this.inviteStateFor(user) === 'ringing') {
+      return;
+    }
+
+    this.setInviteState(user.id, 'ringing');
+    this.lastInviteTarget = user.id;
+
+    // Free the button again if they never answer, so they can be asked a second time.
+    this.clearInviteTimer(user.id);
+    this.inviteTimers.set(
+      user.id,
+      setTimeout(() => {
+        if (this.inviteStates().get(user.id) === 'ringing') {
+          this.setInviteState(user.id, null);
+        }
+      }, InviteRingTimeoutMs),
+    );
+
+    try {
+      await this.signalRService.inviteToMeeting(user.id, meetingId);
+    } catch (err) {
+      this.setInviteState(user.id, 'failed');
+      this.toast.error(`Could not invite ${user.username}.`);
+      console.error('addToCall failed', err);
+    }
+  }
+
+  inviteStateFor(user: User): InviteState | undefined {
+    return this.inviteStates().get(user.id);
+  }
+
   async endCall(): Promise<void> {
     this.isEndingCall = true;
-    const meetingId = this.currentMeetingId();
 
     await this.livekit.leaveMeeting();
     await this.signalRService.setLeftCall();
@@ -240,11 +373,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     this.incomingInvite.set(null);
     this.chatMessages.set([]);
     this.chatDraft.set('');
-
-    // If the host wants to explicitly close the room for everyone, uncomment:
-    // if (meetingId && this.livekit.isHost()) {
-    //   try { await firstValueFrom(this.meetingApi.end(meetingId)); } catch { /* ignore */ }
-    // }
+    this.startedMeetingId = null;
 
     await this.router.navigate(['/dashboard']);
   }
@@ -272,6 +401,15 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     void this.livekit.toggleMic();
   }
 
+  /** Opens a side panel, or closes it if it is the one already showing. */
+  togglePanel(panel: CallPanel): void {
+    this.panel.update((current) => (current === panel ? null : panel));
+  }
+
+  closePanel(): void {
+    this.panel.set(null);
+  }
+
   canCall(user: User): boolean {
     if (!this.currentUserConnectionId()) {
       return false;
@@ -288,7 +426,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     return user.isInCall ? 'In a call' : 'Available';
   }
 
-  acceptIncomingCall(): void {
+  async acceptIncomingCall(): Promise<void> {
     const invite = this.incomingInvite();
     if (!invite) {
       return;
@@ -297,12 +435,22 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     // Already in the room, so join right here. (The dashboard takes the other route: it
     // navigates to /meet/:meetingId and lets ngOnInit join, rather than joining twice and
     // racing two connect() calls against the same singleton LivekitMeetingService.)
+    // Accepting while in another call switches to the new one: joinMeeting leaves the old room.
+    this.incomingInvite.set(null);
+    this.startedMeetingId = null;
     void this.signalRService.respondToInvite(invite.inviteId, true);
-    void this.livekit.joinMeeting(invite.meetingId).catch((err) => {
+
+    try {
+      await this.livekit.joinMeeting(invite.meetingId);
+      // Every other join path does this too. Without it the hub never learns this connection is
+      // in the meeting, so it silently drops this user's chat messages and speaking intervals —
+      // and with no intervals, their transcript lines can never be attributed and stay "Speaker B".
+      await this.signalRService.setInCall(invite.meetingId);
+      await this.loadChatHistory(invite.meetingId);
+    } catch (err) {
       this.mediaError.set('Could not join the call.');
       console.error('acceptIncomingCall failed', err);
-    });
-    this.incomingInvite.set(null);
+    }
   }
 
   rejectIncomingCall(): void {
@@ -319,12 +467,22 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     return item.identity;
   }
 
+  /** Action labels, kept identical to the button text the e2e suite looks up. */
   get isCameraOn(): boolean {
-    return this.livekit.isCameraOn();
+    return this.cameraEnabled();
   }
 
   get isMicOn(): boolean {
-    return this.livekit.isMicOn();
+    return this.micEnabled();
+  }
+
+  isSpeaking(identity: string | undefined): boolean {
+    return !!identity && this.activeSpeakerIds().has(identity);
+  }
+
+  /** First letter for the placeholder shown when a camera is off. */
+  initial(name: string | undefined): string {
+    return (name?.trim()[0] ?? '?').toUpperCase();
   }
 
   /** Returns a stable MediaStream for the participant's video, or null. */
@@ -399,7 +557,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     return participant.name || participant.identity;
   }
 
-    /** Load chat history for the given meeting into the signal. */
+  /** Load chat history for the given meeting into the signal. */
   private async loadChatHistory(meetingId: string): Promise<void> {
     try {
       const history = await firstValueFrom(this.meetingApi.getChat(meetingId));
@@ -411,7 +569,7 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
   }
 
   toggleChat(): void {
-    this.chatOpen.update((v) => !v);
+    this.togglePanel('chat');
   }
 
   async sendChat(): Promise<void> {
@@ -445,37 +603,91 @@ export class MeetupHome implements OnInit, AfterViewInit, OnDestroy {
     return msg.senderUsername === this.currentUsername();
   }
 
+  private setInviteState(connectionId: string, state: InviteState | null): void {
+    this.inviteStates.update((current) => {
+      const next = new Map(current);
+      if (state) {
+        next.set(connectionId, state);
+      } else {
+        next.delete(connectionId);
+      }
+      return next;
+    });
+    if (state !== 'ringing') {
+      this.clearInviteTimer(connectionId);
+    }
+  }
+
+  private clearInviteTimer(connectionId: string): void {
+    const timer = this.inviteTimers.get(connectionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.inviteTimers.delete(connectionId);
+    }
+  }
+
+  private clearInviteStates(): void {
+    this.inviteTimers.forEach((timer) => clearTimeout(timer));
+    this.inviteTimers.clear();
+    this.inviteStates.set(new Map());
+    this.lastInviteTarget = null;
+  }
+
+  private isWideScreen(): boolean {
+    return typeof window !== 'undefined' && window.innerWidth >= 1100;
+  }
+
   private bindSignalrCallbacks(): void {
     this.signalRService.setCallbacks({
       onIncomingInvite: (payload) => {
         this.incomingInvite.set(payload);
       },
       onInviteRinging: () => {
-        // Optional: could show "ringing" indicator; currently ringingMessage set in callUser()
+        // The ringing state is set when the invite is sent; nothing more to show here.
       },
       onInviteDeclined: (payload) => {
         this.ringingMessage.set('');
-        window.alert(`${payload.declinedByUsername} declined the call.`);
-        // Caller was already in the room waiting — leave since no one is coming
-        void this.livekit.leaveMeeting();
+        this.setInviteState(payload.declinedByUserId, 'declined');
+        this.toast.info(`${payload.declinedByUsername} declined the call.`);
+
+        // Only abandon a call this client started for that one person, and only if nobody is in
+        // it and nobody else is still being rung. Leaving unconditionally (as this used to) meant
+        // that one person declining an invite to an existing call dropped the inviter out of it.
+        const stillRinging = [...this.inviteStates().values()].includes('ringing');
+        if (
+          payload.meetingId === this.startedMeetingId &&
+          payload.meetingId === this.currentMeetingId() &&
+          this.remoteParticipants().length === 0 &&
+          !stillRinging
+        ) {
+          this.startedMeetingId = null;
+          void this.livekit.leaveMeeting();
+          void this.signalRService.setLeftCall();
+        }
       },
       onInviteAccepted: (payload) => {
         this.ringingMessage.set('');
-        // Both sides call joinMeeting; the callee's Angular calls it in acceptIncomingCall().
-        // The caller is already in the room from callUser(), so nothing more to do here.
-        // Just log for visibility.
-        console.log(
-          'Invite accepted by',
-          payload.acceptedByUsername,
-          'for meeting',
-          payload.meetingId,
-        );
+        // The hub tells both sides; only the inviter needs to react.
+        if (payload.acceptedByUserId !== this.currentUserConnectionId()) {
+          // They drop off the "add" list on their own once their presence shows them in this
+          // meeting; clearing the state means a later re-invite starts from scratch.
+          this.setInviteState(payload.acceptedByUserId, null);
+          if (payload.meetingId === this.currentMeetingId()) {
+            this.toast.success(`${payload.acceptedByUsername} is joining the call.`);
+          }
+        }
       },
       onCallFailed: (message) => {
         this.ringingMessage.set('');
-        window.alert(message);
+        if (this.lastInviteTarget && this.inviteStates().get(this.lastInviteTarget) === 'ringing') {
+          this.setInviteState(this.lastInviteTarget, 'failed');
+        }
+        this.toast.error(message);
       },
       onChatMessageReceived: (payload) => {
+        if (payload.meetingId !== this.currentMeetingId()) {
+          return;
+        }
         this.chatMessages.update((list) => [
           ...list,
           {

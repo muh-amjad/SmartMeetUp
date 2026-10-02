@@ -3,6 +3,7 @@ import {
   AfterViewInit,
   ChangeDetectionStrategy,
   Component,
+  computed,
   ElementRef,
   inject,
   OnInit,
@@ -43,8 +44,10 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
 
+  // Video for current recordings, audio for older audio-only ones — both are HTMLMediaElements, so
+  // seeking from the transcript works the same either way.
   @ViewChild('audioPlayer')
-  audioPlayerRef?: ElementRef<HTMLAudioElement>;
+  audioPlayerRef?: ElementRef<HTMLMediaElement>;
 
   readonly tabs: ReadonlyArray<{ id: DetailTab; label: string }> = [
     { id: 'overview', label: 'Overview' },
@@ -59,6 +62,19 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
 
   readonly meeting = signal<MeetingDetailDto | null>(null);
   readonly recordingUrl = signal<string | null>(null);
+
+  /** Recordings used to be audio-only .ogg files; those still play in an audio player. */
+  readonly recordingIsAudioOnly = computed(() => {
+    const url = this.recordingUrl();
+    if (!url) {
+      return false;
+    }
+    try {
+      return new URL(url).pathname.toLowerCase().endsWith('.ogg');
+    } catch {
+      return false;
+    }
+  });
   readonly loading = signal(true);
 
   readonly utterances = signal<TranscriptUtteranceDto[]>([]);

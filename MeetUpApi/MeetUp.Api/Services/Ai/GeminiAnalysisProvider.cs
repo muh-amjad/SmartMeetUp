@@ -23,7 +23,7 @@ internal sealed class GeminiAnalysisProvider : LlmAnalysisProviderBase
         string systemPrompt, string userPrompt, double temperature, CancellationToken ct)
     {
         var baseUrl = string.IsNullOrWhiteSpace(Config.BaseUrl) ? DefaultBaseUrl : Config.BaseUrl.TrimEnd('/');
-        var url = $"{baseUrl}/models/{Config.Model}:generateContent?key={Config.ApiKey}";
+        var url = $"{baseUrl}/models/{Config.Model}:generateContent";
 
         var payload = new
         {
@@ -39,8 +39,15 @@ internal sealed class GeminiAnalysisProvider : LlmAnalysisProviderBase
             },
         };
 
-        var response = await Http.PostAsJsonAsync(url, payload, ct);
-        response.EnsureSuccessStatusCode();
+        // The key goes in a header rather than the query string, so it can never end up in a logged URL.
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = JsonContent.Create(payload),
+        };
+        request.Headers.Add("x-goog-api-key", Config.ApiKey);
+
+        using var response = await Http.SendAsync(request, ct);
+        await AiHttp.EnsureSuccessAsync(response, $"Gemini ({Config.Model})", ct);
 
         var body = await response.Content.ReadFromJsonAsync<GenerateContentResponse>(cancellationToken: ct);
         return body?.Candidates?.FirstOrDefault()?.Content?.Parts?.FirstOrDefault()?.Text ?? string.Empty;

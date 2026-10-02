@@ -75,6 +75,9 @@ export class SignalrService {
   private hasJoinedCurrentConnection = false;
   private callbacks: SignalRCallbacks = {};
 
+  /** The meeting this client last told the hub it is in, so a reconnect can restore it. */
+  private activeMeetingId: string | null = null;
+
   constructor() {
     this.createHubConnection();
   }
@@ -91,11 +94,20 @@ export class SignalrService {
       .withAutomaticReconnect()
       .build();
 
-    this.hubConnection.onreconnected(() => {
+    this.hubConnection.onreconnected(async () => {
       this.myConnectionID = this.hubConnection.connectionId ?? '';
       this.hasJoinedCurrentConnection = false;
       console.log('[SignalR] Reconnected');
-      void this.joinUser();
+      await this.joinUser();
+
+      // A reconnect arrives as a brand-new connection, which the hub registers as idle and in no
+      // meeting group. Without re-announcing the meeting, everyone else sees this user as free
+      // to call, and the chat this user sends from here on is rejected while chat sent to them
+      // never arrives — for the rest of the call. Reconnects happen on every network blip and
+      // every API restart (dotnet watch restarts on each code change).
+      if (this.activeMeetingId) {
+        await this.setInCall(this.activeMeetingId);
+      }
     });
   }
 
@@ -162,6 +174,8 @@ export class SignalrService {
   }
 
   async setInCall(meetingId: string): Promise<void> {
+    // Remembered even while disconnected, so the reconnect handler can announce it once back.
+    this.activeMeetingId = meetingId;
     if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
       return;
     }
@@ -169,6 +183,7 @@ export class SignalrService {
   }
 
   async setLeftCall(): Promise<void> {
+    this.activeMeetingId = null;
     if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
       return;
     }
@@ -193,11 +208,13 @@ export class SignalrService {
     meetingId: string,
     intervals: SpeakingInterval[],
   ): Promise<void> {
-    if (
-      this.hubConnection.state !== signalR.HubConnectionState.Connected ||
-      intervals.length === 0
-    ) {
+    if (intervals.length === 0) {
       return;
+    }
+    // Rejects rather than returning quietly, so the caller keeps the batch and retries it. A
+    // silent return here used to discard every turn spoken while the connection was down.
+    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
+      throw new Error('SignalR is not connected; speaking intervals not sent.');
     }
     await this.hubConnection.invoke('ReportSpeakingIntervals', meetingId, intervals);
   }

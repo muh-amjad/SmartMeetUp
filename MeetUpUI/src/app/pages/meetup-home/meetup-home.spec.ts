@@ -48,7 +48,12 @@ describe('MeetupHome', () => {
       remoteParticipants: signal([]),
       localParticipant: signal(null),
       currentMeetingId: signal<string | null>(null),
+      currentMeetingTitle: signal(''),
       isRecording: signal(false),
+      cameraEnabled: signal(false),
+      micEnabled: signal(false),
+      localTrackVersion: signal(0),
+      activeSpeakerIds: signal<ReadonlySet<string>>(new Set()),
       joinMeeting: vi.fn().mockResolvedValue(undefined),
       leaveMeeting: vi.fn().mockResolvedValue(undefined),
     };

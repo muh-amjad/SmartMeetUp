@@ -6,6 +6,13 @@ public sealed class AiProvidersOptions
 
     public string Default { get; set; } = "gemini-2.5-flash";
 
+    /// <summary>
+    /// Gemini model used for semantic-search embeddings. Must support outputDimensionality, because
+    /// transcript_chunks stores 768-dimension vectors (text-embedding-004, the original model, has
+    /// been retired and now returns 404).
+    /// </summary>
+    public string EmbeddingModel { get; set; } = "gemini-embedding-001";
+
     public Dictionary<string, ProviderConfig> Providers { get; set; } = new();
 }
 

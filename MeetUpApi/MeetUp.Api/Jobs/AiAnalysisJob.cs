@@ -77,43 +77,46 @@ public sealed class AiAnalysisJob : IAiAnalysisJob
             Participants = participants,
         };
 
-        AnalysisBundle bundle;
-        IAnalysisProvider providerUsed = host;
+        // Try the chosen provider, then every other configured one. Falling back only to the default
+        // meant that when the default itself was the one failing, keys for the other providers sat
+        // unused while every meeting ended up Failed.
+        var candidates = new List<IAnalysisProvider> { host };
+        candidates.AddRange(_providerFactory.GetFallbacks(host.Key));
 
-        try
+        AnalysisBundle? bundle = null;
+        IAnalysisProvider? providerUsed = null;
+
+        foreach (var candidate in candidates)
         {
-            bundle = await RunWithRetryAsync(host, context, ct);
-        }
-        catch (Exception ex)
-        {
-            var fallback = _providerFactory.GetDefault();
-
-            if (fallback is null || string.Equals(fallback.Key, host.Key, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogError(ex, "AiAnalysisJob: provider {ProviderKey} failed and no other provider is available", host.Key);
-                meeting.Status = MeetingStatus.Failed;
-                await _meetingRepository.SaveChangesAsync(ct);
-                return;
-            }
-
-            _logger.LogWarning(ex,
-                "AiAnalysisJob: provider {FailedProvider} failed for meeting {MeetingId}; falling back to {FallbackProvider}",
-                host.Key, meetingId, fallback.Key);
-
             try
             {
-                bundle = await RunWithRetryAsync(fallback, context, ct);
-                providerUsed = fallback;
+                bundle = await RunWithRetryAsync(candidate, context, ct);
+                providerUsed = candidate;
+                break;
             }
-            catch (Exception fallbackEx)
+            catch (Exception ex)
             {
-                _logger.LogError(fallbackEx,
-                    "AiAnalysisJob: fallback provider {FallbackProvider} also failed for meeting {MeetingId}",
-                    fallback.Key, meetingId);
-                meeting.Status = MeetingStatus.Failed;
-                await _meetingRepository.SaveChangesAsync(ct);
-                return;
+                _logger.LogWarning(ex,
+                    "AiAnalysisJob: provider {ProviderKey} failed for meeting {MeetingId}",
+                    candidate.Key, meetingId);
             }
+        }
+
+        if (bundle is null || providerUsed is null)
+        {
+            _logger.LogError(
+                "AiAnalysisJob: every configured provider failed for meeting {MeetingId} (tried {Providers})",
+                meetingId, string.Join(", ", candidates.Select(c => c.Key)));
+            meeting.Status = MeetingStatus.Failed;
+            await _meetingRepository.SaveChangesAsync(ct);
+            return;
+        }
+
+        if (!string.Equals(providerUsed.Key, host.Key, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation(
+                "Meeting {MeetingId} analysed by fallback provider {FallbackProvider} after {RequestedProvider} failed",
+                meetingId, providerUsed.Key, host.Key);
         }
 
         await PersistAsync(meeting, bundle, providerUsed, participantEntities, ct);

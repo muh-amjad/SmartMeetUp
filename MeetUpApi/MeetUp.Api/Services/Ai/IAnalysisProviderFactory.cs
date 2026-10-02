@@ -10,4 +10,10 @@ public interface IAnalysisProviderFactory
     /// preference, then the system default. Returns null when nothing is configured.
     /// </summary>
     IAnalysisProvider? Resolve(string? requested, string? userPreference);
+
+    /// <summary>
+    /// Every other configured provider, in the order to try them when <paramref name="failedKey"/>
+    /// fails: the system default first, then free providers, then paid ones.
+    /// </summary>
+    IReadOnlyList<IAnalysisProvider> GetFallbacks(string failedKey);
 }

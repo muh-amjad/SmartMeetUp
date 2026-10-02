@@ -3,7 +3,9 @@ using MeetUp.Api.Entities;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services;
 using MeetUp.Api.Services.Ai;
+using MeetUp.Api.Options;
 using MeetUp.Api.Services.AssemblyAi;
+using Microsoft.Extensions.Options;
 
 namespace MeetUp.Api.Jobs;
 
@@ -15,13 +17,18 @@ namespace MeetUp.Api.Jobs;
 public sealed class TranscriptionJob : ITranscriptionJob
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
-    private const int MaxPollAttempts = 20; // ~5 minutes
+    // ~25 minutes. Five minutes was not enough: AssemblyAI with speaker labels and chapters takes
+    // longer than that on a half-hour meeting, so longer meetings timed out and showed as Failed.
+    // Kept under Hangfire's 30-minute invisibility timeout, past which a still-running job is
+    // assumed dead and handed to another worker, submitting the same recording twice.
+    private const int MaxPollAttempts = 100;
 
     private readonly IMeetingRepository _meetingRepository;
     private readonly ITranscriptRepository _transcriptRepository;
     private readonly IBlobStorageService _blobStorage;
     private readonly IAssemblyAiClient _assemblyAiClient;
     private readonly IAnalysisProviderFactory _analysisProviderFactory;
+    private readonly AssemblyAiOptions _assemblyAiOptions;
     private readonly ILogger<TranscriptionJob> _logger;
 
     public TranscriptionJob(
@@ -30,6 +37,7 @@ public sealed class TranscriptionJob : ITranscriptionJob
         IBlobStorageService blobStorage,
         IAssemblyAiClient assemblyAiClient,
         IAnalysisProviderFactory analysisProviderFactory,
+        IOptions<AssemblyAiOptions> assemblyAiOptions,
         ILogger<TranscriptionJob> logger)
     {
         _meetingRepository = meetingRepository;
@@ -37,6 +45,7 @@ public sealed class TranscriptionJob : ITranscriptionJob
         _blobStorage = blobStorage;
         _assemblyAiClient = assemblyAiClient;
         _analysisProviderFactory = analysisProviderFactory;
+        _assemblyAiOptions = assemblyAiOptions.Value;
         _logger = logger;
     }
 
@@ -57,9 +66,24 @@ public sealed class TranscriptionJob : ITranscriptionJob
             return;
         }
 
+        // Transcription is optional (see deploy/README.md: "meetings record but are never
+        // transcribed"). Calling AssemblyAI without a key only produces a 401, which used to mark a
+        // perfectly good recording Failed and show it as a failed analysis. The recording is the
+        // finished product here, so the meeting is Ready.
+        if (string.IsNullOrWhiteSpace(_assemblyAiOptions.ApiKey))
+        {
+            _logger.LogWarning(
+                "TranscriptionJob: no AssemblyAI API key is configured, so meeting {MeetingId} is kept " +
+                "as a recording only. Set AssemblyAi:ApiKey to enable transcripts and analysis.",
+                meetingId);
+            meeting.Status = MeetingStatus.Ready;
+            await _meetingRepository.SaveChangesAsync(ct);
+            return;
+        }
+
         try
         {
-            var audioUrl = await _blobStorage.GetSignedDownloadUrlAsync(meeting.RecordingBlobKey, TimeSpan.FromHours(4), ct);
+            var audioUrl = await GetAudioUrlForAssemblyAiAsync(meeting.RecordingBlobKey, ct);
             var transcriptId = await _assemblyAiClient.SubmitTranscriptionAsync(audioUrl, ct);
             var result = await PollUntilDoneAsync(transcriptId, ct);
 
@@ -133,6 +157,21 @@ public sealed class TranscriptionJob : ITranscriptionJob
             await _meetingRepository.SaveChangesAsync(ct);
             throw; // surfaces the failure in the Hangfire dashboard; no auto-retry (see attribute above)
         }
+    }
+
+    /// <summary>
+    /// A URL AssemblyAI can fetch the recording from: either a presigned link straight into storage,
+    /// or — when storage is not reachable from the internet — the URL of a copy uploaded from here.
+    /// </summary>
+    private async Task<string> GetAudioUrlForAssemblyAiAsync(string blobKey, CancellationToken ct)
+    {
+        if (!_assemblyAiOptions.UploadRecordings)
+        {
+            return await _blobStorage.GetSignedDownloadUrlAsync(blobKey, TimeSpan.FromHours(4), ct);
+        }
+
+        await using var media = await _blobStorage.OpenReadAsync(blobKey, ct);
+        return await _assemblyAiClient.UploadAsync(media, ct);
     }
 
     private async Task<AssemblyAiTranscriptResult> PollUntilDoneAsync(string transcriptId, CancellationToken ct)

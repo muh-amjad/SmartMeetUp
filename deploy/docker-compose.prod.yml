@@ -87,6 +87,9 @@ services:
 
       AiProviders__Default: gemini-2.5-flash
       AiProviders__Providers__gemini-2.5-flash__ApiKey: ${GEMINI_API_KEY}
+      # Defaults match appsettings.json; set these in .env when Google retires a model.
+      AiProviders__Providers__gemini-2.5-flash__Model: ${GEMINI_MODEL:-gemini-flash-latest}
+      AiProviders__EmbeddingModel: ${GEMINI_EMBEDDING_MODEL:-gemini-embedding-001}
       AiProviders__Providers__groq-llama-3.3-70b__ApiKey: ${GROQ_API_KEY}
       AiProviders__Providers__openrouter-deepseek-v3__ApiKey: ${OPENROUTER_API_KEY}
       AiProviders__Providers__openai-gpt-4o-mini__ApiKey: ${OPENAI_API_KEY}

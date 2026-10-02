@@ -123,12 +123,12 @@ public class MeetingsController : ControllerBase
                 meeting.LiveKitRoomName);
         }
 
-        // Kick off audio recording. Egress waits for the room to become active, so it's safe
+        // Kick off the recording. Egress waits for the room to become active, so it's safe
         // to start this immediately even though no one has joined yet. Best-effort: a meeting
         // must still be usable even if the recording pipeline is unavailable.
         try
         {
-            var outputKey = $"recordings/{meeting.Id}/{DateTime.UtcNow:yyyyMMddHHmmss}.ogg";
+            var outputKey = $"recordings/{meeting.Id}/{DateTime.UtcNow:yyyyMMddHHmmss}.mp4";
             meeting.EgressId = await _liveKitService.StartCompositeEgressAsync(meeting.LiveKitRoomName, outputKey, ct);
             await _meetingRepository.SaveChangesAsync(ct);
         }

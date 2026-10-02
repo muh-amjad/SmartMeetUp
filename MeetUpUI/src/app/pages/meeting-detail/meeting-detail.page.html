@@ -50,7 +50,11 @@
     <section class="panel">
       <h2>Recording</h2>
       @if (recordingUrl(); as url) {
-        <audio #audioPlayer controls preload="metadata" [src]="url"></audio>
+        @if (recordingIsAudioOnly()) {
+          <audio #audioPlayer controls preload="metadata" [src]="url"></audio>
+        } @else {
+          <video #audioPlayer class="recording-video" controls playsinline preload="metadata" [src]="url"></video>
+        }
       } @else {
         <p class="muted">No recording is available for this meeting.</p>
       }

@@ -175,7 +175,10 @@ public class LiveKitWebhookController : ControllerBase
             return;
         }
 
-        if (meeting.Status != MeetingStatus.Ended && meeting.Status != MeetingStatus.Processing)
+        // Only a meeting that is still running moves to Processing. The two webhooks race: when the
+        // recording outcome arrives first it has already settled the status (Ended, Failed, or
+        // Processing with a transcript queued), and overwriting that would strand the meeting.
+        if (meeting.Status is MeetingStatus.Scheduled or MeetingStatus.Live)
         {
             meeting.EndedUtc = DateTime.UtcNow;
             meeting.Status = MeetingStatus.Processing;
@@ -205,33 +208,61 @@ public class LiveKitWebhookController : ControllerBase
             return;
         }
 
+        var status = payload.EgressInfo?.Status ?? string.Empty;
         var fileResult = payload.EgressInfo?.FileResults.FirstOrDefault();
-        if (fileResult is not null)
+
+        // egress_ended fires for every way a recording can stop, not just success — and an aborted
+        // recording still reports the filename it *would* have written. Trusting that filename is
+        // what made failed recordings look successful: transcription then ran against a file that
+        // was never uploaded, failed, and the meeting surfaced as a failed analysis rather than as
+        // the recording problem it actually was. LIMIT_REACHED is kept: the file is complete up to
+        // the limit.
+        var completed = status is "EGRESS_COMPLETE" or "EGRESS_LIMIT_REACHED";
+        var hasMedia = fileResult is not null
+            && !string.IsNullOrWhiteSpace(fileResult.Filename)
+            && fileResult.DurationNanoseconds > 0;
+
+        if (completed && hasMedia)
         {
-            meeting.RecordingBlobKey = fileResult.Filename;
+            meeting.RecordingBlobKey = fileResult!.Filename;
             meeting.RecordingDurationSeconds = (int)(fileResult.DurationNanoseconds / 1_000_000_000);
+            if (fileResult.StartedAtNanoseconds > 0)
+            {
+                meeting.RecordingStartedUtc = DateTime.UnixEpoch.AddTicks(fileResult.StartedAtNanoseconds / 100);
+            }
+
+            // room_finished already moves Live -> Processing; this just keeps it there in case
+            // egress reports back before/without a room_finished event for some reason.
+            if (meeting.Status is MeetingStatus.Live or MeetingStatus.Ended)
+            {
+                meeting.Status = MeetingStatus.Processing;
+            }
         }
         else
         {
-            _logger.LogWarning("egress_ended for {EgressId} had no file results (recording may have failed)", egressId);
-        }
+            // Aborted with nothing captured (typically "Start signal not received": nobody ever
+            // published audio or video) is a meeting that simply has no recording. A genuine
+            // failure is surfaced as one. Either way nothing is queued, so the meeting no longer
+            // sits in Processing forever waiting for a transcript that cannot come.
+            var failed = status == "EGRESS_FAILED" || (completed && !hasMedia);
+            meeting.Status = failed ? MeetingStatus.Failed : MeetingStatus.Ended;
+            meeting.EndedUtc ??= DateTime.UtcNow;
 
-        // room_finished already moves Live -> Processing; this just keeps it there in case
-        // egress reports back before/without a room_finished event for some reason.
-        if (meeting.Status is MeetingStatus.Live or MeetingStatus.Ended)
-        {
-            meeting.Status = MeetingStatus.Processing;
+            _logger.LogWarning(
+                "Meeting {MeetingId} has no usable recording: egress {EgressId} ended with status " +
+                "{Status} ({Error}), durationNs={Duration}",
+                meeting.Id, egressId, status, payload.EgressInfo?.Error, fileResult?.DurationNanoseconds);
         }
 
         meeting.UpdatedUtc = DateTime.UtcNow;
         await _dbContext.SaveChangesAsync(ct);
 
-        _logger.LogInformation(
-            "Meeting {MeetingId} recording saved: key={BlobKey}, durationSec={Duration}",
-            meeting.Id, meeting.RecordingBlobKey, meeting.RecordingDurationSeconds);
-
-        if (fileResult is not null)
+        if (completed && hasMedia)
         {
+            _logger.LogInformation(
+                "Meeting {MeetingId} recording saved: key={BlobKey}, durationSec={Duration}",
+                meeting.Id, meeting.RecordingBlobKey, meeting.RecordingDurationSeconds);
+
             BackgroundJob.Enqueue<ITranscriptionJob>(j => j.RunAsync(meeting.Id, CancellationToken.None));
         }
     }

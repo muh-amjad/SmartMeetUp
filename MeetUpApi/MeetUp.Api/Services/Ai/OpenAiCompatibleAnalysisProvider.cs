@@ -40,8 +40,8 @@ internal sealed class OpenAiCompatibleAnalysisProvider : LlmAnalysisProviderBase
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Config.ApiKey);
 
-        var response = await Http.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
+        using var response = await Http.SendAsync(request, ct);
+        await AiHttp.EnsureSuccessAsync(response, $"{Key} ({Config.Model})", ct);
 
         var body = await response.Content.ReadFromJsonAsync<ChatCompletionResponse>(cancellationToken: ct);
         return body?.Choices?.FirstOrDefault()?.Message?.Content ?? string.Empty;

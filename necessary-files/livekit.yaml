@@ -4,6 +4,13 @@ rtc:
   tcp_port: 7881
   udp_port: 7882
   use_external_ip: false
+  # Advertise 127.0.0.1 *in addition to* the container's own address. Browsers on Windows can only
+  # reach LiveKit through Docker's port forwarding on 127.0.0.1; the recorder's headless Chrome
+  # (which shares this container's network) can only use the container address, because Chrome
+  # will not run WebRTC over loopback. Forcing a single address with --node-ip 127.0.0.1 served
+  # the browsers and starved the recorder: every video recording aborted with
+  # "Start signal not received". With both offered, each side picks the one it can reach.
+  enable_loopback_candidate: true
 
 redis:
   address: redis:6379
