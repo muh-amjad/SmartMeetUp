@@ -44,8 +44,13 @@
             <td>{{ m.participantCount }}</td>
             <td>{{ m.isHost ? 'Host' : 'Participant' }}</td>
             <td>
-              <button type="button" (click)="openMeeting(m)">
-                {{ m.status === 'Live' ? 'Rejoin' : 'View' }}
+              <button
+                type="button"
+                (click)="openMeeting(m)"
+                [disabled]="isProcessing(m.status)"
+                [attr.title]="isProcessing(m.status) ? 'Recording, transcript and summary are still being prepared' : null"
+              >
+                {{ isProcessing(m.status) ? 'Processing…' : m.status === 'Live' ? 'Rejoin' : 'View' }}
               </button>
             </td>
           </tr>

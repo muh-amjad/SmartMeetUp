@@ -99,8 +99,14 @@
   font-size: 13px;
 }
 
-.meetings-table button:hover {
+.meetings-table button:hover:not(:disabled) {
   background: #2563eb;
+}
+
+.meetings-table button:disabled {
+  background: #334155;
+  color: #cbd5e1;
+  cursor: not-allowed;
 }
 
 .status-badge {

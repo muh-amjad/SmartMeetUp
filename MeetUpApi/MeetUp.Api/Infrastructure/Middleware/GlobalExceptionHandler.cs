@@ -12,9 +12,28 @@ public sealed class GlobalExceptionHandler(
     private readonly ILogger<GlobalExceptionHandler> _logger = logger;
     private readonly IHostEnvironment _environment = environment;
 
+    /// <summary>
+    /// Exceptions that are the API's normal way of answering "not found", "forbidden", "conflict" or
+    /// "invalid" — expected outcomes of a correct request flow, not faults. The meeting page asks
+    /// for a summary before analysis has finished, for instance, and a 404 is the right answer.
+    /// </summary>
+    public static bool IsClientError(Exception exception) =>
+        exception is NotFoundException or ConflictException or ForbiddenException or ValidationException;
+
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
-        _logger.LogError(exception, "An unhandled exception occurred: {ExceptionMessage}", exception.Message);
+        // Client errors were logged at Error with a full stack trace (twice, counting the
+        // middleware's own entry), burying the real failures in the log under routine 404s.
+        if (IsClientError(exception))
+        {
+            _logger.LogInformation(
+                "{Method} {Path} answered with {ExceptionType}: {ExceptionMessage}",
+                httpContext.Request.Method, httpContext.Request.Path, exception.GetType().Name, exception.Message);
+        }
+        else
+        {
+            _logger.LogError(exception, "An unhandled exception occurred: {ExceptionMessage}", exception.Message);
+        }
 
         var response = httpContext.Response;
         response.ContentType = "application/problem+json";

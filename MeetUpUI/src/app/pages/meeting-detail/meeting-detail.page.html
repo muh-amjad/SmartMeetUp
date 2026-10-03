@@ -10,6 +10,18 @@
   }
 
   @if (meeting(); as m) {
+    @if (processing()) {
+      <section class="panel processing-panel" role="status" aria-live="polite">
+        <span class="processing-spinner" aria-hidden="true"></span>
+        <h1>{{ m.title }}</h1>
+        <p>
+          This meeting has ended and is being processed. The recording, transcript and summary will
+          appear here when they are ready — usually within a few minutes.
+        </p>
+        <p class="muted">This page updates by itself; you can also come back later.</p>
+        <a routerLink="/meetings" class="back-link">Back to meetings</a>
+      </section>
+    } @else {
     <section class="meeting-summary">
       @if (editingTitle()) {
         <div class="title-edit">
@@ -345,5 +357,6 @@
         }
       }
     </section>
+    }
   }
 </div>

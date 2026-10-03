@@ -523,3 +523,54 @@ audio {
   line-height: 1.6;
   overflow-x: auto;
 }
+
+/* Shown instead of the page while the meeting is still being processed. */
+.processing-panel {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+  max-width: 560px;
+  margin: 2rem auto;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+
+.processing-panel h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.processing-panel p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.processing-spinner {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  border: 3px solid #334155;
+  border-top-color: #60a5fa;
+  animation: processing-spin 0.9s linear infinite;
+}
+
+.back-link {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+@keyframes processing-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processing-spinner {
+    animation: none;
+  }
+}

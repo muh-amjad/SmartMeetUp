@@ -308,7 +308,12 @@
   overflow-wrap: anywhere;
 }
 
-.row-main:hover .row-title { color: #93c5fd; }
+.row-main:hover:not(:disabled) .row-title { color: #93c5fd; }
+
+.row-main:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 
 .row-meta {
   font-size: 12px;

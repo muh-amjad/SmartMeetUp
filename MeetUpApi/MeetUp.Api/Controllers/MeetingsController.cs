@@ -169,7 +169,10 @@ public class MeetingsController : ControllerBase
         var meeting = await _meetingRepository.GetByIdAsync(id, ct)
             ?? throw new NotFoundException($"Meeting {id} not found.");
 
-        if (meeting.Status == MeetingStatus.Ended || meeting.EndedUtc.HasValue)
+        // Any status past Live means the call is over — Processing, Ready and Failed included, not
+        // just Ended. Checking Ended alone let people reopen a finished meeting, which started a
+        // fresh, unrecorded room under the old meeting's name.
+        if (meeting.EndedUtc.HasValue || meeting.Status is not (MeetingStatus.Scheduled or MeetingStatus.Live))
         {
             throw new ConflictException("Meeting has already ended.");
         }
@@ -238,14 +241,15 @@ public class MeetingsController : ControllerBase
             throw new ForbiddenException("Only the host can end this meeting.");
         }
 
-        if (meeting.Status == MeetingStatus.Ended)
+        if (meeting.EndedUtc.HasValue)
         {
             return NoContent();  // already ended, idempotent
         }
 
         await _liveKitService.EndRoomAsync(meeting.LiveKitRoomName, ct);
 
-        meeting.Status = MeetingStatus.Ended;
+        // Same rule as room_finished: Processing only when a recording is on its way.
+        meeting.Status = meeting.EgressId is null ? MeetingStatus.Ended : MeetingStatus.Processing;
         meeting.EndedUtc = DateTime.UtcNow;
         meeting.UpdatedUtc = DateTime.UtcNow;
         await _meetingRepository.UpdateAsync(meeting, ct);

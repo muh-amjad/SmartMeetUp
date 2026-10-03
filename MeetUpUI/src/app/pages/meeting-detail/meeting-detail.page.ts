@@ -6,6 +6,7 @@ import {
   computed,
   ElementRef,
   inject,
+  OnDestroy,
   OnInit,
   signal,
   ViewChild,
@@ -13,6 +14,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
+import { isMeetingProcessing, ProcessingRecheckMs } from '../../models/meeting-status';
 import {
   ActionItemDto,
   DecisionDto,
@@ -38,7 +40,7 @@ type LoadState = 'loading' | 'ready' | 'unavailable';
   styleUrl: './meeting-detail.page.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class MeetingDetailPage implements OnInit, AfterViewInit {
+export class MeetingDetailPage implements OnInit, AfterViewInit, OnDestroy {
   private readonly meetingApi = inject(MeetingApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -61,6 +63,15 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
   readonly activeTab = signal<DetailTab>('overview');
 
   readonly meeting = signal<MeetingDetailDto | null>(null);
+
+  /**
+   * The meeting has ended but its recording, transcript and analysis are still being produced.
+   * The page waits on a status panel instead of loading: the content isn't there yet, and asking
+   * for it only produced empty panels and "not analysed yet" errors.
+   */
+  readonly processing = computed(() => isMeetingProcessing(this.meeting()?.status));
+
+  private recheckTimer: ReturnType<typeof setTimeout> | null = null;
   readonly recordingUrl = signal<string | null>(null);
 
   /** Recordings used to be audio-only .ogg files; those still play in an audio player. */
@@ -125,6 +136,24 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
     }
 
     await this.loadMeeting();
+
+    if (this.processing()) {
+      this.scheduleRecheck();
+      return;
+    }
+
+    await this.loadContent();
+  }
+
+  ngOnDestroy(): void {
+    if (this.recheckTimer !== null) {
+      clearTimeout(this.recheckTimer);
+      this.recheckTimer = null;
+    }
+  }
+
+  /** Everything that only exists once processing has finished. */
+  private async loadContent(): Promise<void> {
     await Promise.all([
       this.loadTranscript(),
       this.loadRecording(),
@@ -138,6 +167,25 @@ export class MeetingDetailPage implements OnInit, AfterViewInit {
       this.pendingSeekSeconds = seekMs / 1000;
       this.applyPendingSeek();
     }
+  }
+
+  /** Re-checks a processing meeting and loads the page by itself as soon as it is done. */
+  private scheduleRecheck(): void {
+    this.recheckTimer = setTimeout(async () => {
+      this.recheckTimer = null;
+      try {
+        const fresh = await firstValueFrom(this.meetingApi.getById(this.meetingId));
+        this.meeting.set(fresh);
+      } catch {
+        // A transient failure; keep waiting rather than abandon the page.
+      }
+
+      if (this.processing()) {
+        this.scheduleRecheck();
+      } else {
+        await this.loadContent();
+      }
+    }, ProcessingRecheckMs);
   }
 
   private pendingSeekSeconds: number | null = null;

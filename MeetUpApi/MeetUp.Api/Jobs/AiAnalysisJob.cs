@@ -131,7 +131,10 @@ public sealed class AiAnalysisJob : IAiAnalysisJob
 
     private const int MaxAttemptsPerStep = 3;
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
-    private static readonly Regex RetryInSeconds = new(@"retry in (\d+(?:\.\d+)?)s", RegexOptions.IgnoreCase);
+    // "retry in 8.47s", "retry in 2m30s", "retry in 9h12m4.85s" — Gemini's per-day quota answers in
+    // hours, and a seconds-only pattern missed those entirely.
+    private static readonly Regex RetryIn = new(
+        @"retry in (?:(?<h>\d+)h)?(?:(?<m>\d+)m)?(?:(?<s>\d+(?:\.\d+)?)s)?", RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Runs the four analyses one after another, retrying each on its own when the provider is
@@ -165,9 +168,10 @@ public sealed class AiAnalysisJob : IAiAnalysisJob
             {
                 return await call();
             }
-            catch (HttpRequestException ex) when (attempt < MaxAttemptsPerStep && IsTransient(ex))
+            catch (HttpRequestException ex) when (attempt < MaxAttemptsPerStep && IsTransient(ex)
+                                                  && RetryDelay(ex, attempt) is not null)
             {
-                var delay = RetryDelay(ex, attempt);
+                var delay = RetryDelay(ex, attempt)!.Value;
                 _logger.LogInformation(
                     "AiAnalysisJob: {Step} got {StatusCode}; retrying in {DelaySeconds:0}s (attempt {Attempt} of {MaxAttempts})",
                     step, (int?)ex.StatusCode, delay.TotalSeconds, attempt + 1, MaxAttemptsPerStep);
@@ -184,19 +188,38 @@ public sealed class AiAnalysisJob : IAiAnalysisJob
 
     /// <summary>
     /// Waits as long as the provider asks — Gemini's 429 says "Please retry in 8.47s" — and otherwise
-    /// backs off 5s, then 15s.
+    /// backs off 5s, then 15s. Returns null when the provider asks for longer than is worth waiting
+    /// (its daily quota says "retry in 9h…"): retrying could only fail again, so the job moves
+    /// straight on to the next provider instead.
     /// </summary>
-    private static TimeSpan RetryDelay(HttpRequestException ex, int attempt)
+    internal static TimeSpan? RetryDelay(HttpRequestException ex, int attempt)
     {
-        var match = RetryInSeconds.Match(ex.Message);
-        if (match.Success
-            && double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
+        var requested = RequestedRetryDelay(ex.Message);
+        if (requested is null)
         {
-            var requested = TimeSpan.FromSeconds(Math.Ceiling(seconds) + 1);
-            return requested < MaxRetryDelay ? requested : MaxRetryDelay;
+            return TimeSpan.FromSeconds(attempt == 1 ? 5 : 15);
         }
 
-        return TimeSpan.FromSeconds(attempt == 1 ? 5 : 15);
+        return requested <= MaxRetryDelay ? requested : null;
+    }
+
+    private static TimeSpan? RequestedRetryDelay(string message)
+    {
+        var match = RetryIn.Match(message);
+        if (!match.Success || match.Length == "retry in ".Length)
+        {
+            return null;
+        }
+
+        static double Part(Group group) =>
+            group.Success ? double.Parse(group.Value, NumberStyles.Float, CultureInfo.InvariantCulture) : 0;
+
+        var requested = TimeSpan.FromHours(Part(match.Groups["h"]))
+            + TimeSpan.FromMinutes(Part(match.Groups["m"]))
+            + TimeSpan.FromSeconds(Math.Ceiling(Part(match.Groups["s"])));
+
+        // A second of margin so the retry lands after the window, not on its edge.
+        return requested + TimeSpan.FromSeconds(1);
     }
 
     private async Task PersistAsync(

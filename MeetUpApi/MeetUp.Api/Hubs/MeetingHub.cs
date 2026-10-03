@@ -115,7 +115,9 @@ public class MeetingHub : Hub
         // signed-in user who learned a meeting id could pull people into a call they are not in.
         var ct = Context.ConnectionAborted;
         var meeting = await _meetingRepository.GetByIdAsync(meetingId, ct);
-        if (meeting is null || meeting.EndedUtc.HasValue || meeting.Status == MeetingStatus.Ended)
+        if (meeting is null
+            || meeting.EndedUtc.HasValue
+            || meeting.Status is not (MeetingStatus.Scheduled or MeetingStatus.Live))
         {
             await Clients.Client(callerConnectionId).SendAsync("CallFailed", "This meeting has already ended.");
             return;

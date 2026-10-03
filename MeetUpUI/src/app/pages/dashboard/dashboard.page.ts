@@ -4,6 +4,7 @@ import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } 
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AccountAnalyticsDto, ActionItemWithMeetingDto } from '../../dtos/meetings/analysis.dto';
+import { isMeetingProcessing, ProcessingRecheckMs } from '../../models/meeting-status';
 import { MeetingListItemDto } from '../../dtos/meetings/meeting-list-item.dto';
 import { UserSearchResultDto } from '../../dtos/user-search-result.dto';
 import { AiProviderService } from '../../services/ai-provider.service';
@@ -41,6 +42,8 @@ export class DashboardPage implements OnInit, OnDestroy {
   readonly displayName = signal('');
 
   readonly recentMeetings = signal<MeetingListItemDto[]>([]);
+  readonly isProcessing = isMeetingProcessing;
+  private recheckTimer: ReturnType<typeof setTimeout> | null = null;
   readonly openItems = signal<ActionItemWithMeetingDto[]>([]);
   readonly analytics = signal<AccountAnalyticsDto | null>(null);
   readonly loading = signal(true);
@@ -71,13 +74,17 @@ export class DashboardPage implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.signalR.setCallbacks({});
+    this.clearRecheck();
   }
 
   private async loadSummary(): Promise<void> {
     this.loading.set(true);
 
     const meetings = firstValueFrom(this.meetingApi.list(undefined, 1, 5))
-      .then((list) => this.recentMeetings.set(list))
+      .then((list) => {
+        this.recentMeetings.set(list);
+        this.scheduleRecheckIfProcessing(list);
+      })
       .catch(() => this.recentMeetings.set([]));
 
     const items = firstValueFrom(this.aiProviders.getActionItems('open'))
@@ -176,10 +183,38 @@ export class DashboardPage implements OnInit, OnDestroy {
   }
 
   openMeeting(meeting: MeetingListItemDto): void {
+    // Still being processed: its page would only show empty panels. The row is disabled too.
+    if (isMeetingProcessing(meeting.status)) {
+      return;
+    }
+
     if (meeting.status === 'Live' || meeting.status === 'Scheduled') {
       this.router.navigate(['/meet', meeting.meetingId]);
     } else {
       this.router.navigate(['/meetings', meeting.meetingId]);
+    }
+  }
+
+  /** While a recent meeting is processing, re-check it so it becomes openable on its own. */
+  private scheduleRecheckIfProcessing(list: MeetingListItemDto[]): void {
+    this.clearRecheck();
+    if (!list.some((m) => isMeetingProcessing(m.status))) {
+      return;
+    }
+    this.recheckTimer = setTimeout(() => {
+      firstValueFrom(this.meetingApi.list(undefined, 1, 5))
+        .then((fresh) => {
+          this.recentMeetings.set(fresh);
+          this.scheduleRecheckIfProcessing(fresh);
+        })
+        .catch(() => this.scheduleRecheckIfProcessing(this.recentMeetings()));
+    }, ProcessingRecheckMs);
+  }
+
+  private clearRecheck(): void {
+    if (this.recheckTimer !== null) {
+      clearTimeout(this.recheckTimer);
+      this.recheckTimer = null;
     }
   }
 

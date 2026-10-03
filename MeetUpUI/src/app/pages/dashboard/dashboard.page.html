@@ -98,11 +98,21 @@
         <ul class="rows">
           @for (m of recentMeetings(); track m.meetingId) {
             <li class="row">
-              <button type="button" class="row-main" (click)="openMeeting(m)">
+              <button
+                type="button"
+                class="row-main"
+                (click)="openMeeting(m)"
+                [disabled]="isProcessing(m.status)"
+                [attr.title]="isProcessing(m.status) ? 'Recording, transcript and summary are still being prepared' : null"
+              >
                 <span class="row-title">{{ m.title }}</span>
                 <span class="row-meta">
-                  {{ m.actualStartUtc ? (m.actualStartUtc | date:'MMM d, h:mm a') : 'Not started' }}
-                  · {{ m.participantCount }} participant(s)
+                  @if (isProcessing(m.status)) {
+                    Preparing recording, transcript and summary…
+                  } @else {
+                    {{ m.actualStartUtc ? (m.actualStartUtc | date:'MMM d, h:mm a') : 'Not started' }}
+                    · {{ m.participantCount }} participant(s)
+                  }
                 </span>
               </button>
               <span class="status-badge" [class]="statusClass(m.status)">{{ m.status }}</span>

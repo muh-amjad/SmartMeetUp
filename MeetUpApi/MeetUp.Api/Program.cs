@@ -48,7 +48,17 @@ namespace MeetUp.Api
                 loggerConfig
                     .ReadFrom.Configuration(context.Configuration)
                     .ReadFrom.Services(services)
-                    .Enrich.WithProperty("Environment", context.HostingEnvironment.EnvironmentName);
+                    .Enrich.WithProperty("Environment", context.HostingEnvironment.EnvironmentName)
+                    // ASP.NET's exception middleware logs every exception at Error before
+                    // GlobalExceptionHandler decides what it means, so each routine 404 used to
+                    // appear as an error with a stack trace. Drop only that entry, and only for the
+                    // API's own client-error exceptions; GlobalExceptionHandler logs those itself at
+                    // Information. Genuine failures still come through at Error.
+                    .Filter.ByExcluding(logEvent =>
+                        logEvent.Exception is not null
+                        && GlobalExceptionHandler.IsClientError(logEvent.Exception)
+                        && logEvent.Properties.TryGetValue("SourceContext", out var source)
+                        && source.ToString().Contains("ExceptionHandlerMiddleware", StringComparison.Ordinal));
             });
 
             builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
@@ -115,6 +125,7 @@ namespace MeetUp.Api
             builder.Services.AddScoped<IAiAnalysisJob, AiAnalysisJob>();
             builder.Services.AddScoped<ISpeakerMappingJob, SpeakerMappingJob>();
             builder.Services.AddScoped<IEmbeddingJob, EmbeddingJob>();
+            builder.Services.AddScoped<IStaleMeetingSweepJob, StaleMeetingSweepJob>();
 
             // Pick the email transport from what is actually configured: a real provider if there is
             // an API key, a local catcher if there is an SMTP host, otherwise a stub that reports
@@ -348,6 +359,12 @@ namespace MeetUp.Api
                 {
                     Authorization = [new Infrastructure.HangfireAdminAuthFilter()],
                 });
+
+                // Every 15 minutes; see StaleMeetingSweepJob for why meetings can get stuck.
+                app.Services.GetRequiredService<IRecurringJobManager>().AddOrUpdate<IStaleMeetingSweepJob>(
+                    "sweep-stale-processing-meetings",
+                    job => job.RunAsync(CancellationToken.None),
+                    "*/15 * * * *");
             }
 
             await EnsureDatabaseAsync(app.Services, app.Environment);

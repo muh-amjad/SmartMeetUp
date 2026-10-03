@@ -226,18 +226,29 @@ public class LiveKitWebhookController : ControllerBase
             return;
         }
 
-        // Only a meeting that is still running moves to Processing. The two webhooks race: when the
+        // The call is over whatever the recording's state, so the end time is always recorded. It is
+        // what stops anyone rejoining — previously it was skipped whenever the recording's outcome
+        // had arrived first, and a finished meeting could be reopened.
+        meeting.EndedUtc ??= DateTime.UtcNow;
+
+        // Only a meeting that is still running changes status here. The two webhooks race: when the
         // recording outcome arrives first it has already settled the status (Ended, Failed, or
         // Processing with a transcript queued), and overwriting that would strand the meeting.
+        //
+        // Processing means "a recording is on its way" and is only right when one is: the meeting
+        // list will not open a Processing meeting, so one with no recording coming would be locked
+        // there for good. EgressId is cleared when a recording fails mid-call (see egress_ended).
         if (meeting.Status is MeetingStatus.Scheduled or MeetingStatus.Live)
         {
-            meeting.EndedUtc = DateTime.UtcNow;
-            meeting.Status = MeetingStatus.Processing;
-            meeting.UpdatedUtc = DateTime.UtcNow;
-            await _dbContext.SaveChangesAsync(ct);
+            meeting.Status = meeting.EgressId is null ? MeetingStatus.Ended : MeetingStatus.Processing;
 
-            _logger.LogInformation("Meeting {MeetingId} marked Processing (recording pipeline will run)", meeting.Id);
+            _logger.LogInformation(
+                "Meeting {MeetingId} finished: {Status}", meeting.Id,
+                meeting.Status == MeetingStatus.Processing ? "Processing (recording pipeline will run)" : "Ended (no recording)");
         }
+
+        meeting.UpdatedUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(ct);
     }
 
     private async Task HandleEgressEndedAsync(LiveKitWebhookEventDto payload, CancellationToken ct)
@@ -288,6 +299,19 @@ public class LiveKitWebhookController : ControllerBase
             {
                 meeting.Status = MeetingStatus.Processing;
             }
+        }
+        else if (meeting.Status is MeetingStatus.Scheduled or MeetingStatus.Live)
+        {
+            // The recording stopped but the call has not: people are still in it. Ending the
+            // meeting here would turn away everyone who tries to join for the rest of the call.
+            // Forgetting the egress instead lets room_finished close it as a meeting without a
+            // recording, rather than as one waiting for a recording that will never arrive.
+            meeting.EgressId = null;
+
+            _logger.LogWarning(
+                "Meeting {MeetingId}: recording stopped during the call (egress {EgressId}, status " +
+                "{Status}: {Error}); the meeting continues unrecorded",
+                meeting.Id, egressId, status, payload.EgressInfo?.Error);
         }
         else
         {
