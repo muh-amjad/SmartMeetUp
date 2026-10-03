@@ -1,4 +1,4 @@
-﻿using Hangfire;
+using Hangfire;
 using Livekit.Server.Sdk.Dotnet;
 using MeetUp.Api.Data;
 using MeetUp.Api.Dtos.Webhooks;
@@ -9,6 +9,8 @@ using MeetUp.Api.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace MeetUp.Api.Controllers;
@@ -21,7 +23,7 @@ public class LiveKitWebhookController : ControllerBase
     private readonly AppDbContext _dbContext;
     private readonly ILogger<LiveKitWebhookController> _logger;
     private readonly IMeetingParticipantRepository _participantRepository;
-    private readonly WebhookReceiver _receiver;
+    private readonly TokenVerifier _tokenVerifier;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -38,13 +40,13 @@ public class LiveKitWebhookController : ControllerBase
         _dbContext = dbContext;
         _participantRepository = participantRepository;
         _logger = logger;
-        _receiver = new WebhookReceiver(_liveKitOptions.ApiKey, _liveKitOptions.ApiSecret);
+        _tokenVerifier = new TokenVerifier(_liveKitOptions.ApiKey, _liveKitOptions.ApiSecret);
     }
 
     /// <summary>
     /// LiveKit posts events here whenever room/participant/egress state changes.
-    /// Signature is verified via the SDK's WebhookReceiver — HMAC of the body
-    /// signed with our ApiSecret.
+    /// The Authorization header is a JWT signed with our ApiSecret that carries a SHA-256 of the
+    /// body; both are checked before anything in the body is trusted.
     /// </summary>
     [HttpPost]
     public async Task<IActionResult> Receive(CancellationToken ct)
@@ -73,17 +75,17 @@ public class LiveKitWebhookController : ControllerBase
             return Unauthorized();
         }
 
-        WebhookEvent evt;
-        try
+        // Verified here rather than with the SDK's WebhookReceiver.Receive. That method also parses
+        // the body into the SDK's own event type, strictly — and LiveKit Cloud runs a newer server
+        // than this SDK version knows, adding fields such as participant "capabilities" and
+        // room_finished's "roomEndReason". Parsing failed on them, the failure was reported as a bad
+        // signature, and those events were dropped: losing room_finished meant a meeting never got
+        // an end time and could still be rejoined. Its ignoreUnknownFields flag does not help in
+        // this SDK version. Nothing here needs the SDK's event object anyway — the body is read
+        // below with our own DTO, which ignores fields it does not know.
+        if (!IsSignedByLiveKit(body, authHeader, out var failure))
         {
-            // Throws if the signature doesn't match — rejects spoofed calls
-            evt = _receiver.Receive(body, authHeader);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "LiveKit webhook signature verification failed. Error: {ErrorMessage}",
-                ex.Message);
+            _logger.LogWarning("LiveKit webhook rejected: {Reason}", failure);
             return Unauthorized();
         }
 
@@ -129,6 +131,55 @@ public class LiveKitWebhookController : ControllerBase
         }
 
         return Ok();
+    }
+
+    /// <summary>
+    /// The same two checks the SDK's WebhookReceiver makes: the token's signature, issuer and
+    /// expiry (via the SDK's TokenVerifier), and that the body is exactly what was signed.
+    /// </summary>
+    private bool IsSignedByLiveKit(string body, string authHeader, out string failure)
+    {
+        var token = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authHeader["Bearer ".Length..]
+            : authHeader;
+
+        ClaimsModel claims;
+        try
+        {
+            claims = _tokenVerifier.Verify(token);
+        }
+        catch (Exception ex)
+        {
+            failure = $"invalid token ({ex.Message})";
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(claims.Sha256))
+        {
+            failure = "token carries no body checksum";
+            return false;
+        }
+
+        byte[] signedHash;
+        try
+        {
+            signedHash = Convert.FromBase64String(claims.Sha256);
+        }
+        catch (FormatException)
+        {
+            failure = "body checksum is not valid base64";
+            return false;
+        }
+
+        var actualHash = SHA256.HashData(Encoding.UTF8.GetBytes(body));
+        if (!CryptographicOperations.FixedTimeEquals(signedHash, actualHash))
+        {
+            failure = "body does not match its signed checksum";
+            return false;
+        }
+
+        failure = string.Empty;
+        return true;
     }
 
     private async Task HandleRoomStartedAsync(LiveKitWebhookEventDto payload, CancellationToken ct)

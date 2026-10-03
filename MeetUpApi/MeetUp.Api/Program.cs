@@ -21,6 +21,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
+using Pgvector.Npgsql;
 using Microsoft.IdentityModel.Tokens;
 using Serilog;
 using Serilog.Core;
@@ -58,11 +60,28 @@ namespace MeetUp.Api
             builder.Services.Configure<AiProvidersOptions>(builder.Configuration.GetSection(AiProvidersOptions.SectionName));
             builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection(EmailOptions.SectionName));
 
-            // UseVector is what maps pgvector's Vector type; without it every read or write of an
-            // embedding column throws at runtime even though the model and migration look fine.
-            builder.Services.AddDbContext<AppDbContext>(options =>
+            // EF Core gets a data source of its own with pgvector registered on it directly.
+            //
+            // Registering it only through the EF options (npgsql.UseVector()) adds the vector type to
+            // Npgsql's *global* list, which Npgsql reads once, when it first builds the connection pool
+            // for a connection string. Hangfire opens a connection with this same string during
+            // startup, before any DbContext exists, so that pool was built without the vector type —
+            // and every embedding write failed with "Writing values of 'Pgvector.Vector' is not
+            // supported". It never showed up locally only because embeddings are skipped without a
+            // Gemini key. A dedicated data source does not depend on what connected first.
+            builder.Services.AddSingleton(_ =>
+            {
+                var dataSourceBuilder = new NpgsqlDataSourceBuilder(
+                    builder.Configuration.GetConnectionString("DefaultConnection"));
+                dataSourceBuilder.UseVector();
+                return dataSourceBuilder.Build();
+            });
+
+            // UseVector here is still needed: this one maps the Vector type for EF Core's queries
+            // (column type, CosineDistance), the one above for the database driver.
+            builder.Services.AddDbContext<AppDbContext>((services, options) =>
                 options.UseNpgsql(
-                    builder.Configuration.GetConnectionString("DefaultConnection"),
+                    services.GetRequiredService<NpgsqlDataSource>(),
                     npgsql => npgsql.UseVector()));
 
             builder.Services

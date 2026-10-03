@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Net;
+using System.Text.RegularExpressions;
 using MeetUp.Api.Entities;
 using MeetUp.Api.Repositories;
 using MeetUp.Api.Services.Ai;
@@ -126,35 +129,74 @@ public sealed class AiAnalysisJob : IAiAnalysisJob
             meetingId, providerUsed.Key, bundle.ActionItems.Length, bundle.Decisions.Length);
     }
 
-    /// <summary>Runs the four analyses concurrently, retrying the whole set once on the same provider.</summary>
-    private static async Task<AnalysisBundle> RunWithRetryAsync(
+    private const int MaxAttemptsPerStep = 3;
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
+    private static readonly Regex RetryInSeconds = new(@"retry in (\d+(?:\.\d+)?)s", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Runs the four analyses one after another, retrying each on its own when the provider is
+    /// rate-limited or overloaded.
+    ///
+    /// They used to run all at once, and any failure re-sent all four immediately — up to eight
+    /// requests within a few seconds. Free tiers allow only a handful a minute (Gemini's current
+    /// flash model: five), so a single overloaded (503) response was enough to exhaust the quota
+    /// and fail the whole analysis with 429s.
+    /// </summary>
+    private async Task<AnalysisBundle> RunWithRetryAsync(
         IAnalysisProvider provider, MeetingContext context, CancellationToken ct)
     {
-        try
+        var summary = await WithRetryAsync(
+            "summary", () => provider.GenerateSummaryAsync(context.Transcript, ct), ct);
+        var actionItems = await WithRetryAsync(
+            "action items", () => provider.ExtractActionItemsAsync(context.Transcript, context.Participants, ct), ct);
+        var decisions = await WithRetryAsync(
+            "decisions", () => provider.ExtractDecisionsAsync(context.Transcript, ct), ct);
+        var email = await WithRetryAsync(
+            "follow-up email", () => provider.DraftFollowUpEmailAsync(context, ct), ct);
+
+        return new AnalysisBundle(summary, actionItems, decisions, email);
+    }
+
+    private async Task<T> WithRetryAsync<T>(string step, Func<Task<T>> call, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
         {
-            return await RunAllAsync(provider, context, ct);
-        }
-        catch
-        {
-            return await RunAllAsync(provider, context, ct);
+            try
+            {
+                return await call();
+            }
+            catch (HttpRequestException ex) when (attempt < MaxAttemptsPerStep && IsTransient(ex))
+            {
+                var delay = RetryDelay(ex, attempt);
+                _logger.LogInformation(
+                    "AiAnalysisJob: {Step} got {StatusCode}; retrying in {DelaySeconds:0}s (attempt {Attempt} of {MaxAttempts})",
+                    step, (int?)ex.StatusCode, delay.TotalSeconds, attempt + 1, MaxAttemptsPerStep);
+                await Task.Delay(delay, ct);
+            }
         }
     }
 
-    private static async Task<AnalysisBundle> RunAllAsync(
-        IAnalysisProvider provider, MeetingContext context, CancellationToken ct)
+    /// <summary>Rate limits, overload and network failures pass; bad keys and bad requests do not.</summary>
+    private static bool IsTransient(HttpRequestException ex) =>
+        ex.StatusCode is null
+        || ex.StatusCode == HttpStatusCode.TooManyRequests
+        || (int)ex.StatusCode >= 500;
+
+    /// <summary>
+    /// Waits as long as the provider asks — Gemini's 429 says "Please retry in 8.47s" — and otherwise
+    /// backs off 5s, then 15s.
+    /// </summary>
+    private static TimeSpan RetryDelay(HttpRequestException ex, int attempt)
     {
-        var summaryTask = provider.GenerateSummaryAsync(context.Transcript, ct);
-        var actionItemsTask = provider.ExtractActionItemsAsync(context.Transcript, context.Participants, ct);
-        var decisionsTask = provider.ExtractDecisionsAsync(context.Transcript, ct);
-        var emailTask = provider.DraftFollowUpEmailAsync(context, ct);
+        var match = RetryInSeconds.Match(ex.Message);
+        if (match.Success
+            && double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
+        {
+            var requested = TimeSpan.FromSeconds(Math.Ceiling(seconds) + 1);
+            return requested < MaxRetryDelay ? requested : MaxRetryDelay;
+        }
 
-        await Task.WhenAll(summaryTask, actionItemsTask, decisionsTask, emailTask);
-
-        return new AnalysisBundle(
-            await summaryTask,
-            await actionItemsTask,
-            await decisionsTask,
-            await emailTask);
+        return TimeSpan.FromSeconds(attempt == 1 ? 5 : 15);
     }
 
     private async Task PersistAsync(
