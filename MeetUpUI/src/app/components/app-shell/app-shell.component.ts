@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, HostListener, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from '../../services/auth.service';
@@ -37,6 +37,9 @@ export class AppShellComponent {
   readonly searchQuery = signal('');
   readonly menuOpen = signal(false);
 
+  /** The side menu as a slide-out drawer, on screens too narrow to show it permanently. */
+  readonly navOpen = signal(false);
+
   readonly username = computed(() => this.auth.currentUser()?.username ?? '');
   readonly email = computed(() => this.auth.currentUser()?.email ?? '');
   readonly initials = computed(() => {
@@ -56,6 +59,22 @@ export class AppShellComponent {
       return;
     }
     this.router.navigate(['/search'], { queryParams: { q, mode: 'hybrid' } });
+  }
+
+  openNav(): void {
+    this.menuOpen.set(false);
+    this.navOpen.set(true);
+  }
+
+  closeNav(): void {
+    this.navOpen.set(false);
+  }
+
+  /** Escape closes whichever overlay is open, as users expect from a drawer or menu. */
+  @HostListener('document:keydown.escape')
+  onEscape(): void {
+    this.navOpen.set(false);
+    this.menuOpen.set(false);
   }
 
   toggleMenu(): void {

@@ -19,6 +19,7 @@
 
 .utterance-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin-bottom: 4px;
@@ -46,6 +47,7 @@
 
 .text {
   margin: 0;
+  overflow-wrap: anywhere;
   color: #cbd5e1;
   line-height: 1.5;
 }

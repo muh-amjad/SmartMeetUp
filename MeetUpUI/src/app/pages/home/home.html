@@ -65,7 +65,7 @@
 
     <div class="slider-dots">
       @for (slide of slides; track trackByTitle($index, slide); let i = $index) {
-        <button type="button" [class.active]="activeSlide() === i" (click)="selectSlide(i)"></button>
+        <button type="button" [class.active]="activeSlide() === i" [attr.aria-label]="'Show slide ' + (i + 1)" (click)="selectSlide(i)"></button>
       }
     </div>
   </section>

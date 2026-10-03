@@ -5,6 +5,7 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { gsap } from 'gsap';
 import { AuthService } from '../../services/auth.service';
+import { httpErrorMessage } from '../../utils/http-error-message';
 
 @Component({
   selector: 'app-signup',
@@ -60,11 +61,7 @@ export class SignupPage implements AfterViewInit {
         },
         error: (error) => {
           this.isSubmitting.set(false);
-          const rawError = Array.isArray(error?.error)
-            ? error.error.join(', ')
-            : typeof error?.error === 'string'
-              ? error.error
-              : error?.error?.toString?.() ?? '';
+          const rawError = httpErrorMessage(error, '');
 
           const normalizedError = rawError.toLowerCase();
           if (normalizedError.includes('email is already registered') || normalizedError.includes('email') && normalizedError.includes('exists')) {

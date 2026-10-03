@@ -14,6 +14,13 @@ export const httpErrorInterceptor: HttpInterceptorFn = (request, next) => {
 
   return next(request).pipe(
     catchError((error: HttpErrorResponse) => {
+      // A 404 on a read means "nothing here yet" — no recording, no summary, no email draft — and
+      // the page already shows that state inline. Toasting it put red error banners over a
+      // perfectly normal meeting page. Callers still receive the error and decide what it means.
+      if (request.method === 'GET' && error.status === 404) {
+        return throwError(() => error);
+      }
+
       let errorMessage = 'An error occurred';
 
       const problemDetails = error.error as { title?: string; detail?: string } | null;

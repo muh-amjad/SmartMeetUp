@@ -1,21 +1,19 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
-import { SignalrService } from './services/signalr.service';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
-import { appConfig } from './app.config';
-import { routes } from './app.routes';
-import { UsersEffects } from './store/effects/users';
+import { IncomingCallDialogComponent } from './components/incoming-call/incoming-call-dialog.component';
 import { ToastComponent } from './components/toast/toast.component';
+import { IncomingCallService } from './services/incoming-call.service';
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet, CommonModule, FormsModule, ToastComponent],
+  imports: [RouterOutlet, ToastComponent, IncomingCallDialogComponent],
   templateUrl: './app.html',
   styleUrl: './app.css',
   standalone: true,
 })
 export class App {
-  protected readonly title = signal('MeetUpUI');
-  constructor() {}
+  constructor() {
+    // Keeps the signed-in user reachable for calls on every page, not just the call screens.
+    inject(IncomingCallService);
+  }
 }

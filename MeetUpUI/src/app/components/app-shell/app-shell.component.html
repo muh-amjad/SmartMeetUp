@@ -1,9 +1,16 @@
 <div class="shell">
-  <aside class="sidebar">
-    <a class="brand" routerLink="/dashboard">
-      <span class="brand-mark">M</span>
-      <span class="brand-name">MeetUp</span>
-    </a>
+  @if (navOpen()) {
+    <div class="nav-backdrop" (click)="closeNav()" aria-hidden="true"></div>
+  }
+
+  <aside class="sidebar" id="app-sidebar" [class.open]="navOpen()">
+    <div class="sidebar-head">
+      <a class="brand" routerLink="/dashboard" (click)="closeNav()">
+        <span class="brand-mark">M</span>
+        <span class="brand-name">MeetUp</span>
+      </a>
+      <button type="button" class="icon-button nav-close" (click)="closeNav()" aria-label="Close menu">✕</button>
+    </div>
 
     <nav class="nav" aria-label="Main">
       @for (item of nav; track item.path) {
@@ -11,7 +18,8 @@
           class="nav-link"
           [routerLink]="item.path"
           routerLinkActive="active"
-          [routerLinkActiveOptions]="{ exact: item.path === '/meetings' }">
+          [routerLinkActiveOptions]="{ exact: item.path === '/meetings' }"
+          (click)="closeNav()">
           <span class="nav-mark" aria-hidden="true">{{ item.mark }}</span>
           <span>{{ item.label }}</span>
         </a>
@@ -21,6 +29,16 @@
 
   <div class="main">
     <header class="topbar">
+      <button
+        type="button"
+        class="icon-button menu-toggle"
+        aria-controls="app-sidebar"
+        [attr.aria-expanded]="navOpen()"
+        aria-label="Open menu"
+        (click)="openNav()">
+        <span class="hamburger" aria-hidden="true"></span>
+      </button>
+
       <form class="topbar-search" (ngSubmit)="submitSearch()" role="search">
         <input
           type="search"

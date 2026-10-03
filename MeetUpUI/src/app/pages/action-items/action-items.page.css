@@ -1,5 +1,5 @@
 .items-shell {
-  padding: 28px 32px 64px;
+  padding: 28px clamp(16px, 4vw, 32px) 64px;
   max-width: 900px;
   margin: 0 auto;
   color: #e5e7eb;

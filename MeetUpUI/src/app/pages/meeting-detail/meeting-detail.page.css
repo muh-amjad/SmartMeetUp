@@ -1,5 +1,5 @@
 .detail-shell {
-  padding: 32px 40px;
+  padding: 32px clamp(16px, 4vw, 40px);
   max-width: 900px;
   margin: 0 auto;
   color: #e5e7eb;
@@ -60,8 +60,8 @@
 }
 
 .title-edit input {
-  flex: 1;
-  min-width: 240px;
+  flex: 1 1 240px;
+  min-width: 0;
   background: #0f172a;
   border: 1px solid #334155;
   border-radius: 5px;
@@ -100,14 +100,16 @@
 
 .meeting-summary h1 {
   margin: 0 0 12px;
-  font-size: 28px;
+  font-size: clamp(22px, 5vw, 28px);
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .meta-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 8px 16px;
   color: #94a3b8;
   font-size: 14px;
   margin-bottom: 12px;
@@ -150,8 +152,10 @@
 
 .panel-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 16px;
 }
 
@@ -187,15 +191,24 @@ audio {
   background: #0b1220;
 }
 
+/* One row that scrolls sideways when it doesn't fit, rather than wrapping onto three lines. */
 .tabs {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
   margin-top: 32px;
   border-bottom: 1px solid #1e293b;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tab {
+  flex: none;
+  white-space: nowrap;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -356,6 +369,7 @@ audio {
 
 .button-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -572,5 +586,35 @@ audio {
 @media (prefers-reduced-motion: reduce) {
   .processing-spinner {
     animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .detail-shell {
+    padding-top: 20px;
+  }
+
+  .panel {
+    margin-top: 24px;
+    padding-top: 20px;
+  }
+
+  .tab {
+    padding: 10px 12px;
+  }
+
+  .stat-tile {
+    flex-basis: calc(50% - 6px);
+    min-width: 0;
+  }
+
+  /* Label above the bar, so the bar gets the full width. */
+  .bar-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+  }
+
+  .bar-label {
+    grid-column: 1 / -1;
   }
 }

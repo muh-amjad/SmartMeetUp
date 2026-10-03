@@ -19,6 +19,63 @@
   height: 100vh;
 }
 
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e5e7eb;
+  font-size: 15px;
+  cursor: pointer;
+  flex: none;
+}
+
+.icon-button:hover {
+  background: #334155;
+}
+
+/* Only shown on narrow screens, where the sidebar becomes a drawer. */
+.menu-toggle,
+.nav-close {
+  display: none;
+}
+
+.hamburger,
+.hamburger::before,
+.hamburger::after {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  position: relative;
+}
+
+.hamburger::before,
+.hamburger::after {
+  content: '';
+  position: absolute;
+  left: 0;
+}
+
+.hamburger::before {
+  top: -6px;
+}
+
+.hamburger::after {
+  top: 6px;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -224,45 +281,61 @@
   outline-offset: 2px;
 }
 
-/* ── Narrow screens: nav becomes a horizontal strip ── */
+/*
+ * ── Narrow screens: the sidebar becomes a slide-out drawer ──
+ * It used to turn into a horizontal strip that scrolled sideways, which cut the menu off
+ * mid-word on a phone ("Action ite…") and hid the rest of the pages entirely.
+ */
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 16px;
-    padding: 12px 16px;
-    border-right: none;
-    border-bottom: 1px solid #1e293b;
-    overflow-x: auto;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 50;
+    width: min(280px, 84vw);
+    height: 100vh;
+    height: 100dvh;
+    padding: 16px 14px calc(16px + env(safe-area-inset-bottom));
+    border-right: 1px solid #1e293b;
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.55);
+    overflow-y: auto;
+    transform: translateX(-100%);
+    /* Hidden from keyboard and screen readers while closed, not just moved off screen. */
+    visibility: hidden;
+    transition: transform 0.22s ease, visibility 0.22s;
   }
 
-  .brand-name {
-    display: none;
+  .sidebar.open {
+    transform: none;
+    visibility: visible;
   }
 
-  .nav {
-    flex-direction: row;
-    gap: 4px;
+  .nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(2, 6, 23, 0.65);
+  }
+
+  .menu-toggle,
+  .nav-close {
+    display: inline-grid;
   }
 
   .nav-link {
-    border-left: none;
-    border-bottom: 2px solid transparent;
-    white-space: nowrap;
-  }
-
-  .nav-link.active {
-    border-left-color: transparent;
-    border-bottom-color: #3b82f6;
+    padding: 12px 12px;
+    font-size: 15px;
   }
 
   .topbar {
-    padding: 12px 16px;
+    gap: 10px;
+    padding: 10px 16px;
+  }
+
+  .topbar-search {
+    min-width: 0;
   }
 }

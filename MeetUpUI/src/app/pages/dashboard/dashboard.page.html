@@ -1,18 +1,4 @@
 <div class="dash">
-  @if (incomingInvite(); as invite) {
-    <div class="incoming-call-banner" role="alert">
-      <span><strong>{{ invite.fromUsername }}</strong> is calling…</span>
-      <div class="incoming-actions">
-        <button type="button" class="accept-btn" (click)="acceptIncoming()">Accept</button>
-        <button type="button" class="reject-btn" (click)="declineIncoming()">Decline</button>
-      </div>
-    </div>
-  }
-
-  @if (ringingMessage()) {
-    <div class="ringing-banner">{{ ringingMessage() }}</div>
-  }
-
   <header class="dash-head">
     <h1>{{ displayName() ? 'Welcome back, ' + displayName() : 'Dashboard' }}</h1>
     <p class="hint">Start a call, or pick up where a meeting left off.</p>

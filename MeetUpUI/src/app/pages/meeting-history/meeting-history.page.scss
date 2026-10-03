@@ -1,15 +1,12 @@
 .history-shell {
-  padding: 32px 40px;
+  padding: 32px clamp(16px, 4vw, 40px);
   max-width: 1200px;
   margin: 0 auto;
   color: #e5e7eb;
 }
 
 .history-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
 
 .history-header .kicker {
@@ -22,7 +19,7 @@
 
 .history-header h1 {
   margin: 0 0 4px;
-  font-size: 32px;
+  font-size: clamp(24px, 5vw, 32px);
   font-weight: 700;
 }
 
@@ -136,4 +133,91 @@
 .status-default {
   background: #475569;
   color: #cbd5e1;
+}
+
+
+/*
+ * Phones and narrow tablets: each meeting becomes a card. Seven table columns can't fit, and
+ * scrolling a table sideways on a phone hides the button that opens the meeting.
+ */
+@media (max-width: 720px) {
+  .history-shell {
+    padding-top: 20px;
+  }
+
+  .meetings-table,
+  .meetings-table tbody,
+  .meetings-table tr,
+  .meetings-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .meetings-table {
+    background: transparent;
+    overflow: visible;
+  }
+
+  .meetings-table thead {
+    display: none;
+  }
+
+  .meetings-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .meetings-table tr {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 16px;
+  }
+
+  .meetings-table td {
+    padding: 0;
+    border: none;
+    min-width: 0;
+    font-size: 14px;
+  }
+
+  .meetings-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+  }
+
+  .meetings-table td.title {
+    grid-column: 1 / -1;
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .meetings-table td.status {
+    grid-column: 1 / -1;
+  }
+
+  .meetings-table td.status::before {
+    display: none;
+  }
+
+  .meetings-table td.action {
+    grid-column: 1 / -1;
+    padding-top: 4px;
+  }
+
+  .meetings-table td.action button {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 14px;
+    border-radius: 6px;
+  }
 }

@@ -24,6 +24,12 @@ export class LivekitMeetingService {
   private room: Room | null = null;
 
   /**
+   * Joins and leaves run one at a time. Moving between meetings tears one call page down while
+   * the next starts up, and an overlapping leave and join could otherwise race on the one room.
+   */
+  private roomQueue: Promise<unknown> = Promise.resolve();
+
+  /**
    * How often finished speaking turns are pushed to the server during a call. Short, because
    * anything still buffered when a tab is closed outright is at risk, and every turn that never
    * arrives is a stretch of transcript that cannot be attributed to its speaker.
@@ -73,9 +79,25 @@ export class LivekitMeetingService {
    * Join a meeting: fetches a fresh token from the API, then connects to LiveKit.
    * Idempotent — leaves any current room before joining the new one.
    */
-  async joinMeeting(meetingId: string): Promise<void> {
+  joinMeeting(meetingId: string): Promise<void> {
+    return this.enqueue(() => this.doJoin(meetingId));
+  }
+
+  /** Disconnect from the LiveKit room and clear signals. */
+  leaveMeeting(): Promise<void> {
+    return this.enqueue(() => this.doLeave());
+  }
+
+  private enqueue(work: () => Promise<void>): Promise<void> {
+    const run = this.roomQueue.then(work, work);
+    // The queue carries on after a failure; the caller still sees the error from `run`.
+    this.roomQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async doJoin(meetingId: string): Promise<void> {
     if (this.room) {
-      await this.leaveMeeting();
+      await this.doLeave();
     }
 
     // 1. Get token from our backend
@@ -153,8 +175,7 @@ export class LivekitMeetingService {
     this.startSpeakingFlushTimer();
   }
 
-  /** Disconnect from the LiveKit room and clear signals. */
-  async leaveMeeting(): Promise<void> {
+  private async doLeave(): Promise<void> {
     if (!this.room) {
       return;
     }
@@ -276,6 +297,11 @@ export class LivekitMeetingService {
   private wireEvents(room: Room): void {
     room
       .on(RoomEvent.ConnectionStateChanged, (state) => {
+        // A room that has already been replaced by the next meeting's must not touch the
+        // signals: its late Disconnected would wipe out the call the user has just joined.
+        if (this.room !== null && this.room !== room) {
+          return;
+        }
         this.connectionState.set(state);
         if (state === ConnectionState.Disconnected) {
           this.clearState();

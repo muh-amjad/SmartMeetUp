@@ -53,7 +53,13 @@ public class MeetingHub : Hub
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         _logger.LogInformation("Meeting hub disconnected: {ConnectionId}", Context.ConnectionId);
-        _presenceTracker.TryRemoveUser(Context.ConnectionId, out _);
+        _presenceTracker.TryRemoveUser(Context.ConnectionId, out var user);
+
+        // A closed tab or lost network must not leave anyone's phone ringing for a call that is
+        // gone, nor leave a caller waiting on someone who can no longer answer.
+        await CancelInvitesFromAsync(Context.ConnectionId);
+        await MissInvitesToAsync(Context.ConnectionId, user?.Username);
+
         await BroadcastUsersAsync();
         await base.OnDisconnectedAsync(exception);
     }
@@ -108,6 +114,17 @@ public class MeetingHub : Hub
         if (!_presenceTracker.TryGetUser(targetConnectionId, out var callee))
         {
             await Clients.Client(callerConnectionId).SendAsync("CallFailed", "User is no longer available.");
+            return;
+        }
+
+        // From inside a call you can only add people to that call. Calling someone into a different
+        // meeting means leaving this one first.
+        if (caller.IsInCall
+            && !string.IsNullOrEmpty(caller.RoomId)
+            && !string.Equals(caller.RoomId, meetingId.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            await Clients.Client(callerConnectionId).SendAsync(
+                "CallFailed", "Leave your current call before calling someone else.");
             return;
         }
 
@@ -168,23 +185,25 @@ public class MeetingHub : Hub
     /// On accept: both sides then call POST /api/meetings/{id}/join to obtain
     /// their own LiveKit tokens and connect to the media room.
     /// </summary>
-    public async Task RespondToInvite(string inviteId, bool accepted)
+    /// <returns>
+    /// False when the invite no longer stands (the caller hung up, or it was already answered),
+    /// so the callee does not walk into a call that is not there.
+    /// </returns>
+    public async Task<bool> RespondToInvite(string inviteId, bool accepted)
     {
-        if (!_presenceTracker.TryRemoveInvite(inviteId, out var invite))
+        // Matched on the callee as well, so only the person invited can answer — or remove — it.
+        var invite = _presenceTracker
+            .RemoveInvites(i => i.InviteId == inviteId && i.CalleeConnectionId == Context.ConnectionId)
+            .FirstOrDefault();
+        if (invite is null)
         {
-            return;
-        }
-
-        // Only the actual callee can respond — prevents spoofing
-        if (invite.CalleeConnectionId != Context.ConnectionId)
-        {
-            return;
+            return false;
         }
 
         if (!_presenceTracker.TryGetUser(invite.CallerConnectionId, out var caller)
             || !_presenceTracker.TryGetUser(invite.CalleeConnectionId, out var callee))
         {
-            return;
+            return false;
         }
 
         var meetingId = Guid.Parse(invite.RoomId);
@@ -198,7 +217,7 @@ public class MeetingHub : Hub
                 declinedByUserId = callee.Id,
                 declinedByUsername = callee.Username,
             });
-            return;
+            return true;
         }
 
         var acceptedPayload = new
@@ -211,11 +230,72 @@ public class MeetingHub : Hub
 
         await Clients.Client(invite.CallerConnectionId).SendAsync("InviteAccepted", acceptedPayload);
         await Clients.Client(invite.CalleeConnectionId).SendAsync("InviteAccepted", acceptedPayload);
+        return true;
+    }
+
+    /// <summary>
+    /// The callee let the call ring out without answering. The caller is told it was missed —
+    /// which reads differently from a deliberate decline.
+    /// </summary>
+    public async Task MissInvite(string inviteId)
+    {
+        var invite = _presenceTracker
+            .RemoveInvites(i => i.InviteId == inviteId && i.CalleeConnectionId == Context.ConnectionId)
+            .FirstOrDefault();
+        if (invite is null)
+        {
+            return;
+        }
+
+        _presenceTracker.TryGetUser(Context.ConnectionId, out var callee);
+        await NotifyCallerOfMissAsync(invite, callee?.Username);
     }
 
     private Task BroadcastUsersAsync()
     {
         return Clients.All.SendAsync("UserJoined", _presenceTracker.GetAllUsers());
+    }
+
+    /// <summary>
+    /// Withdraws invites this connection sent that are still ringing, so the callee's ringing
+    /// stops. <paramref name="exceptMeetingId"/> keeps invites to a meeting the caller is still in.
+    /// </summary>
+    private async Task CancelInvitesFromAsync(string callerConnectionId, string? exceptMeetingId = null)
+    {
+        var cancelled = _presenceTracker.RemoveInvites(i =>
+            i.CallerConnectionId == callerConnectionId
+            && (exceptMeetingId is null
+                || !string.Equals(i.RoomId, exceptMeetingId, StringComparison.OrdinalIgnoreCase)));
+
+        foreach (var invite in cancelled)
+        {
+            await Clients.Client(invite.CalleeConnectionId).SendAsync("InviteCancelled", new
+            {
+                inviteId = invite.InviteId,
+                meetingId = Guid.Parse(invite.RoomId),
+            });
+        }
+    }
+
+    /// <summary>Tells callers that this connection will never answer the invites it was sent.</summary>
+    private async Task MissInvitesToAsync(string calleeConnectionId, string? calleeUsername)
+    {
+        var missed = _presenceTracker.RemoveInvites(i => i.CalleeConnectionId == calleeConnectionId);
+        foreach (var invite in missed)
+        {
+            await NotifyCallerOfMissAsync(invite, calleeUsername);
+        }
+    }
+
+    private Task NotifyCallerOfMissAsync(CallInvite invite, string? calleeUsername)
+    {
+        return Clients.Client(invite.CallerConnectionId).SendAsync("InviteMissed", new
+        {
+            inviteId = invite.InviteId,
+            meetingId = Guid.Parse(invite.RoomId),
+            missedByUserId = invite.CalleeConnectionId,
+            missedByUsername = calleeUsername ?? "They",
+        });
     }
 
     /// <summary>
@@ -249,6 +329,9 @@ public class MeetingHub : Hub
             await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(meetingGuid));
         }
 
+        // Moving to another call abandons the previous one, along with anyone still being rung into it.
+        await CancelInvitesFromAsync(Context.ConnectionId, exceptMeetingId: meetingId);
+
         await BroadcastUsersAsync();
     }
 
@@ -274,6 +357,9 @@ public class MeetingHub : Hub
         {
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(previousMeetingGuid));
         }
+
+        // Hanging up stops the ringing on everyone this caller was still trying to reach.
+        await CancelInvitesFromAsync(Context.ConnectionId);
 
         await BroadcastUsersAsync();
     }

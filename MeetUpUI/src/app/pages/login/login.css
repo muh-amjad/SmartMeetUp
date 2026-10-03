@@ -1,37 +1,40 @@
 :host {
   display: block;
   min-height: 100vh;
-  font-family: 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
+  min-height: 100dvh;
 }
 
+/* Dark, like the rest of the app (this page used to be the one light screen before sign-in). */
 .auth-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 1.5rem;
+  padding: max(24px, env(safe-area-inset-top)) var(--page-gutter) 24px;
   background:
-    radial-gradient(circle at 14% 8%, rgba(56, 189, 248, 0.32), transparent 35%),
-    radial-gradient(circle at 86% 94%, rgba(245, 158, 11, 0.28), transparent 30%),
-    linear-gradient(130deg, #f8fafc, #dbeafe 50%, #ecfeff);
+    radial-gradient(circle at 14% 8%, rgba(59, 130, 246, 0.18), transparent 40%),
+    radial-gradient(circle at 86% 94%, rgba(14, 165, 233, 0.12), transparent 36%),
+    var(--bg);
 }
 
 .auth-card {
-  width: min(460px, 100%);
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(10px);
-  border-radius: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  box-shadow: 0 24px 70px rgba(14, 116, 144, 0.24);
-  padding: 1.8rem;
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: clamp(1.4rem, 5vw, 2rem);
 }
 
 h1 {
   margin: 0;
-  color: #0f172a;
+  color: var(--text);
+  font-size: clamp(1.6rem, 6vw, 2rem);
+  line-height: 1.2;
 }
 
 p {
-  color: #334155;
+  color: var(--text-muted);
 }
 
 form {
@@ -43,26 +46,45 @@ form {
 label {
   display: grid;
   gap: 0.45rem;
-  color: #1e293b;
+  color: var(--text);
   font-weight: 600;
+  font-size: 0.95rem;
 }
 
 input {
-  border-radius: 12px;
-  border: 1px solid #bfdbfe;
+  width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
   padding: 0.75rem 0.85rem;
-  font-size: 0.95rem;
+  /* 16px stops iOS zooming the page when the field is focused. */
+  font-size: 1rem;
+}
+
+input::placeholder {
+  color: var(--text-faint);
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
 }
 
 button {
   margin-top: 0.45rem;
   border: none;
-  border-radius: 999px;
-  background: linear-gradient(95deg, #0ea5e9, #0369a1);
-  color: white;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
   font-weight: 700;
   padding: 0.8rem 1rem;
   cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
 }
 
 button:disabled {
@@ -71,7 +93,7 @@ button:disabled {
 }
 
 .error {
-  color: #b91c1c;
+  color: var(--danger-text);
   margin: 0;
   font-size: 0.9rem;
 }
@@ -82,6 +104,6 @@ button:disabled {
 }
 
 a {
-  color: #0f766e;
+  color: var(--accent-text);
   font-weight: 700;
 }

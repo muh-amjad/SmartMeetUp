@@ -4,19 +4,19 @@ import { FormBuilder, FormGroup, FormsModule, ReactiveFormsModule, Validators } 
 import { Router, RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { AccountAnalyticsDto, ActionItemWithMeetingDto } from '../../dtos/meetings/analysis.dto';
+import { CallPageState } from '../../models/call-page-state';
 import { isMeetingProcessing, ProcessingRecheckMs } from '../../models/meeting-status';
 import { MeetingListItemDto } from '../../dtos/meetings/meeting-list-item.dto';
 import { UserSearchResultDto } from '../../dtos/user-search-result.dto';
 import { AiProviderService } from '../../services/ai-provider.service';
 import { AuthService } from '../../services/auth.service';
 import { MeetingApiService } from '../../services/meeting-api.service';
-import { SignalrService } from '../../services/signalr.service';
 import { UserDirectoryService } from '../../services/user-directory.service';
 
 /**
  * The signed-in landing page: what happened recently, what is outstanding, and the two ways to
- * start a call. The call room itself lives in MeetupHome — this page only creates the meeting and
- * sends the invite, then hands off by navigating.
+ * start a call. Both hand straight over to the meeting page (MeetupHome), which creates the
+ * meeting and rings the other person. Incoming calls ring app-wide (IncomingCallDialog).
  */
 @Component({
   selector: 'app-dashboard',
@@ -30,7 +30,6 @@ export class DashboardPage implements OnInit, OnDestroy {
   private readonly meetingApi = inject(MeetingApiService);
   private readonly aiProviders = inject(AiProviderService);
   private readonly userDirectory = inject(UserDirectoryService);
-  private readonly signalR = inject(SignalrService);
   private readonly auth = inject(AuthService);
   private readonly router = inject(Router);
   private readonly fb = inject(FormBuilder);
@@ -52,28 +51,12 @@ export class DashboardPage implements OnInit, OnDestroy {
   readonly searching = signal(false);
   readonly searchMessage = signal('Search for a teammate to call them directly.');
 
-  readonly incomingInvite = signal<{
-    inviteId: string;
-    meetingId: string;
-    fromUsername: string;
-  } | null>(null);
-  readonly ringingMessage = signal('');
-
   async ngOnInit(): Promise<void> {
     this.displayName.set(this.auth.currentUser()?.username ?? '');
-
-    // Presence + invites are wired here so a call can still reach you while you sit on the
-    // dashboard. Only one routed page is alive at a time, so this never fights the call room's
-    // own handlers over the hub's callback registry.
-    this.bindCallbacks();
-    this.signalR.attachSignalRHandlers();
-    await this.signalR.connectAndJoin();
-
     await this.loadSummary();
   }
 
   ngOnDestroy(): void {
-    this.signalR.setCallbacks({});
     this.clearRecheck();
   }
 
@@ -136,40 +119,20 @@ export class DashboardPage implements OnInit, OnDestroy {
     }
   }
 
-  /** Creates the meeting, rings the target, then moves into the room to wait for them. */
-  async call(result: UserSearchResultDto): Promise<void> {
+  /**
+   * Opens a new meeting page that rings this person. The page creates the meeting and sends the
+   * invite itself, so it is already listening when they answer, decline or let it ring out.
+   */
+  call(result: UserSearchResultDto): void {
     if (!result.isOnline || !result.connectionId) {
       return;
     }
 
-    try {
-      this.ringingMessage.set(`Ringing ${result.username}…`);
-      const meeting = await firstValueFrom(this.meetingApi.create());
-      await this.signalR.inviteToMeeting(result.connectionId, meeting.meetingId);
-      await this.router.navigate(['/meet', meeting.meetingId]);
-    } catch {
-      this.ringingMessage.set('');
-      this.searchMessage.set('Could not start the call.');
-    }
-  }
-
-  async acceptIncoming(): Promise<void> {
-    const invite = this.incomingInvite();
-    if (!invite) {
-      return;
-    }
-    this.incomingInvite.set(null);
-    await this.signalR.respondToInvite(invite.inviteId, true);
-    await this.router.navigate(['/meet', invite.meetingId]);
-  }
-
-  async declineIncoming(): Promise<void> {
-    const invite = this.incomingInvite();
-    if (!invite) {
-      return;
-    }
-    this.incomingInvite.set(null);
-    await this.signalR.respondToInvite(invite.inviteId, false);
+    const state: CallPageState = {
+      source: 'call',
+      invitee: { connectionId: result.connectionId, username: result.username },
+    };
+    this.router.navigate(['/meet'], { state });
   }
 
   statusClass(status: string): string {
@@ -216,24 +179,5 @@ export class DashboardPage implements OnInit, OnDestroy {
       clearTimeout(this.recheckTimer);
       this.recheckTimer = null;
     }
-  }
-
-  private bindCallbacks(): void {
-    this.signalR.setCallbacks({
-      onIncomingInvite: (payload) =>
-        this.incomingInvite.set({
-          inviteId: payload.inviteId,
-          meetingId: payload.meetingId,
-          fromUsername: payload.fromUsername,
-        }),
-      onInviteDeclined: (payload) => {
-        this.ringingMessage.set('');
-        this.searchMessage.set(`${payload.declinedByUsername} declined the call.`);
-      },
-      onCallFailed: (message) => {
-        this.ringingMessage.set('');
-        this.searchMessage.set(message);
-      },
-    });
   }
 }

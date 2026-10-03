@@ -274,6 +274,185 @@ public class MeetingHubTests : IClassFixture<CustomWebApplicationFactory>
         Assert.NotSame(calleeIncoming.Task, completed);
     }
 
+    [Fact]
+    public async Task Caller_Hanging_Up_Stops_The_Callee_Ringing()
+    {
+        var caller = await CreateUser("cancel-caller");
+        var callee = await CreateUser("cancel-callee");
+
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var callerHub = BuildHubConnection(caller.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
+        calleeHub.On<JsonElement>("InviteCancelled", payload => cancelled.TrySetResult(payload.Clone()));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("SetInCall", meetingId);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+        var invite = await AwaitWithTimeout(incoming.Task, "Callee did not receive invite.");
+
+        await callerHub.InvokeAsync("SetLeftCall");
+
+        var payload = await AwaitWithTimeout(cancelled.Task, "Callee was not told the call was withdrawn.");
+        Assert.Equal(invite.GetProperty("inviteId").GetString(), payload.GetProperty("inviteId").GetString());
+
+        // Answering a withdrawn call is refused, so the callee doesn't join an empty room.
+        var stillValid = await calleeHub.InvokeAsync<bool>(
+            "RespondToInvite", invite.GetProperty("inviteId").GetString()!, true);
+        Assert.False(stillValid);
+    }
+
+    [Fact]
+    public async Task Caller_Disconnecting_Stops_The_Callee_Ringing()
+    {
+        var caller = await CreateUser("drop-caller");
+        var callee = await CreateUser("drop-callee");
+
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var callerHub = BuildHubConnection(caller.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
+        calleeHub.On<JsonElement>("InviteCancelled", payload => cancelled.TrySetResult(payload.Clone()));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+        await AwaitWithTimeout(incoming.Task, "Callee did not receive invite.");
+
+        await callerHub.DisposeAsync();
+
+        await AwaitWithTimeout(cancelled.Task, "Callee kept ringing after the caller disconnected.");
+    }
+
+    [Fact]
+    public async Task Unanswered_Invite_Is_Reported_To_The_Caller_As_Missed()
+    {
+        var caller = await CreateUser("miss-caller");
+        var callee = await CreateUser("miss-callee");
+
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var missed = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var callerHub = BuildHubConnection(caller.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
+        callerHub.On<JsonElement>("InviteMissed", payload => missed.TrySetResult(payload.Clone()));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+        var invite = await AwaitWithTimeout(incoming.Task, "Callee did not receive invite.");
+
+        await calleeHub.InvokeAsync("MissInvite", invite.GetProperty("inviteId").GetString()!);
+
+        var payload = await AwaitWithTimeout(missed.Task, "Caller was not told the call was missed.");
+        Assert.Equal(callee.Username, payload.GetProperty("missedByUsername").GetString());
+        Assert.Equal(calleeHub.ConnectionId, payload.GetProperty("missedByUserId").GetString());
+    }
+
+    [Fact]
+    public async Task Callee_Disconnecting_While_Ringing_Is_Reported_As_Missed()
+    {
+        var caller = await CreateUser("gone-caller");
+        var callee = await CreateUser("gone-callee");
+
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var missed = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var callerHub = BuildHubConnection(caller.Token);
+        var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
+        callerHub.On<JsonElement>("InviteMissed", payload => missed.TrySetResult(payload.Clone()));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+        await AwaitWithTimeout(incoming.Task, "Callee did not receive invite.");
+
+        await calleeHub.DisposeAsync();
+
+        var payload = await AwaitWithTimeout(missed.Task, "Caller kept waiting on someone who disconnected.");
+        Assert.Equal(callee.Username, payload.GetProperty("missedByUsername").GetString());
+    }
+
+    [Fact]
+    public async Task Only_The_Callee_Can_Answer_An_Invite()
+    {
+        var caller = await CreateUser("answer-caller");
+        var callee = await CreateUser("answer-callee");
+        var bystander = await CreateUser("answer-bystander");
+
+        var incoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var callerHub = BuildHubConnection(caller.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+        await using var bystanderHub = BuildHubConnection(bystander.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => incoming.TrySetResult(payload.Clone()));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+        await StartAndJoin(bystanderHub);
+
+        var meetingId = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, meetingId);
+        var inviteId = (await AwaitWithTimeout(incoming.Task, "Callee did not receive invite."))
+            .GetProperty("inviteId").GetString()!;
+
+        Assert.False(await bystanderHub.InvokeAsync<bool>("RespondToInvite", inviteId, false));
+
+        // The bystander's attempt must not have used up the invite.
+        Assert.True(await calleeHub.InvokeAsync<bool>("RespondToInvite", inviteId, true));
+    }
+
+    [Fact]
+    public async Task Calling_Into_Another_Meeting_From_Inside_A_Call_Is_Refused()
+    {
+        var caller = await CreateUser("busy-caller");
+        var callee = await CreateUser("busy-callee");
+
+        var calleeIncoming = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callerFailed = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var callerHub = BuildHubConnection(caller.Token);
+        await using var calleeHub = BuildHubConnection(callee.Token);
+
+        calleeHub.On<JsonElement>("ReceiveInvite", payload => calleeIncoming.TrySetResult(payload.Clone()));
+        callerHub.On<string>("CallFailed", message => callerFailed.TrySetResult(message));
+
+        await StartAndJoin(callerHub);
+        await StartAndJoin(calleeHub);
+
+        var currentMeeting = await CreateMeeting(caller.Token);
+        var otherMeeting = await CreateMeeting(caller.Token);
+        await callerHub.InvokeAsync("SetInCall", currentMeeting);
+
+        await callerHub.InvokeAsync("InviteToMeeting", calleeHub.ConnectionId, otherMeeting);
+
+        var message = await AwaitWithTimeout(callerFailed.Task, "Caller was not told to leave their call first.");
+        Assert.Contains("Leave your current call", message);
+
+        var completed = await Task.WhenAny(calleeIncoming.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.NotSame(calleeIncoming.Task, completed);
+    }
+
     // ────────────── helpers ──────────────
 
     private async Task<int> CountSpeakingIntervals(string meetingId)

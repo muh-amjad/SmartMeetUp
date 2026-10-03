@@ -18,8 +18,10 @@ import { ToastService } from '../../services/toast.service';
   styles: [`
     .toast-container {
       position: fixed;
-      top: 20px;
-      right: 20px;
+      top: max(16px, env(safe-area-inset-top));
+      right: 16px;
+      /* Never wider than the screen: long messages wrap instead of running off a phone. */
+      max-width: min(380px, calc(100vw - 32px));
       z-index: 9999;
       pointer-events: none;
     }
@@ -27,8 +29,11 @@ import { ToastService } from '../../services/toast.service';
     .toast {
       margin-bottom: 10px;
       padding: 12px 16px;
-      border-radius: 4px;
+      border-radius: 8px;
       font-size: 14px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
       pointer-events: auto;
       animation: slideIn 0.3s ease-in-out;
     }

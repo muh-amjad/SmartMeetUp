@@ -1,5 +1,5 @@
 .settings-shell {
-  padding: 28px 32px 64px;
+  padding: 28px clamp(16px, 4vw, 32px) 64px;
   max-width: 720px;
   margin: 0 auto;
   color: #e5e7eb;
@@ -137,4 +137,16 @@
   font-size: 13px;
   color: #94a3b8;
   line-height: 1.5;
+}
+
+@media (max-width: 480px) {
+  /* Label above value: a 110px label column leaves too little room for an email address. */
+  .readonly-fields {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .readonly-fields dd {
+    margin-bottom: 10px;
+  }
 }

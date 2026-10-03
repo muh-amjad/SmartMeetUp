@@ -1,108 +1,28 @@
-<div class="app-shell" [class.in-call]="inCall()" #pageShell>
-  @if (incomingInvite(); as incoming) {
-    <div class="incoming-call-banner" role="alertdialog" aria-live="assertive">
-      <div class="incoming-text">
-        <span class="avatar avatar-sm" aria-hidden="true">{{ initial(incoming.fromUsername) }}</span>
-        <span>
-          <strong>{{ incoming.fromUsername }}</strong>
-          {{ inCall() ? 'is inviting you to another call' : 'is calling...' }}
-          @if (inCall()) {
-            <small>Joining will leave your current call.</small>
-          }
-        </span>
-      </div>
-      <div class="incoming-actions">
-        <button type="button" class="accept-btn" (click)="acceptIncomingCall()">
-          {{ inCall() ? 'Join' : 'Accept' }}
-        </button>
-        <button type="button" class="reject-btn" (click)="rejectIncomingCall()">
-          {{ inCall() ? 'Decline' : 'Reject' }}
-        </button>
-      </div>
-    </div>
-  }
-
+<div class="app-shell">
   @if (!inCall()) {
-    <!-- ── Lobby: find someone and start a call ───────────────────────── -->
-    <header class="top-bar">
-      <div>
-        <p class="kicker">MeetUp Workbench</p>
-        <h1>Meeting Room</h1>
-        <p class="identity">{{ currentUsername() }} • {{ currentEmail() }}</p>
-      </div>
-
-      <div class="header-actions">
-        <button type="button" class="secondary" (click)="startInstantMeeting()">Preview</button>
-        <button type="button" class="secondary" (click)="goToDashboard()">Dashboard</button>
-      </div>
-    </header>
-
-    @if (ringingMessage()) {
-      <div class="ringing-banner">{{ ringingMessage() }}</div>
-    }
-    @if (mediaError()) {
-      <p class="media-error">{{ mediaError() }}</p>
-    }
-
-    <div class="lobby-grid">
-      <section class="search-panel">
-        <h2>Search Users</h2>
-        <form [formGroup]="searchForm" (ngSubmit)="searchUsers()" class="search-form">
-          <input type="text" formControlName="query" placeholder="Search by username or email" />
-          <button type="submit" [disabled]="searchForm.invalid || searching()">
-            {{ searching() ? 'Searching...' : 'Search' }}
-          </button>
-        </form>
-
-        <p class="search-message">{{ searchMessage() }}</p>
-
-        <div class="search-results">
-          @for (result of searchResults(); track result.userId) {
-            <div class="search-item">
-              <div class="person-text">
-                <strong>{{ result.username }}</strong>
-                <p>{{ result.email }}</p>
-                <span [class.online]="result.isOnline" [class.offline]="!result.isOnline">
-                  {{ result.isOnline ? 'Online' : 'Offline' }}
-                </span>
-              </div>
-
-              <button
-                type="button"
-                class="primary"
-                (click)="callSearchedUser(result)"
-                [disabled]="!result.isOnline || !result.connectionId"
-              >
-                Call
-              </button>
-            </div>
-          }
-        </div>
-      </section>
-
-      <aside class="users-section">
-        <h3>Online Participants</h3>
-
-        @if (!onlineUsers().length) {
-          <p class="empty">No one else is online right now.</p>
-        }
-
-        @for (user of onlineUsers(); track user.id) {
-          <div class="user-item">
-            <span class="avatar avatar-sm" aria-hidden="true">{{ initial(user.username) }}</span>
-            <div class="person-text">
-              <span>{{ user.username }}</span>
-              <small>{{ user.email || 'No email exposed' }}</small>
-              <span class="status" [class.busy]="user.isInCall">{{ userStatus(user) }}</span>
-            </div>
-
-            @if (canCall(user)) {
-              <button type="button" class="primary" (click)="callUser(user)">Call</button>
+    <!-- ── Not in the room: connecting, calling, or it could not be opened ── -->
+    <main class="status-screen">
+      <section class="status-card" role="status" aria-live="polite">
+        @if (failure()) {
+          <span class="status-icon" aria-hidden="true">!</span>
+          <h1>{{ failure() }}</h1>
+          <p>You can try again, or go back to the dashboard.</p>
+          <div class="status-actions">
+            @if (canRejoin()) {
+              <button type="button" class="primary" (click)="rejoin()">Rejoin</button>
             }
+            <button type="button" class="secondary" (click)="goToDashboard()">Back to dashboard</button>
+          </div>
+        } @else {
+          <span class="spinner" aria-hidden="true"></span>
+          <h1>{{ callee() ? 'Calling ' + callee()!.username + '…' : 'Joining the meeting…' }}</h1>
+          <p>Connecting your camera and microphone.</p>
+          <div class="status-actions">
+            <button type="button" class="secondary" (click)="goToDashboard()">Cancel</button>
           </div>
         }
-      </aside>
-    </div>
+      </section>
+    </main>
   } @else {
     <!-- ── In a call ──────────────────────────────────────────────────── -->
     <div class="call-layout" [class.panel-open]="!!panel()">
@@ -120,9 +40,6 @@
       </header>
 
       <section class="meeting-stage">
-        @if (ringingMessage()) {
-          <div class="stage-notice ringing-banner">{{ ringingMessage() }}</div>
-        }
         @if (mediaError()) {
           <p class="stage-notice media-error">{{ mediaError() }}</p>
         }
@@ -171,10 +88,20 @@
         </div>
 
         @if (!remoteParticipants().length) {
-          <div class="waiting-card">
-            <p>Waiting for others to join.</p>
-            <button type="button" class="primary" (click)="togglePanel('people')">Add people</button>
-          </div>
+          @if (ringingCallee(); as ringing) {
+            <div class="waiting-card calling-card" role="status">
+              <span class="avatar avatar-sm" aria-hidden="true">{{ initial(ringing.username) }}</span>
+              <p>
+                Calling {{ ringing.username }}…
+                <small>Ringing</small>
+              </p>
+            </div>
+          } @else {
+            <div class="waiting-card">
+              <p>Waiting for others to join.</p>
+              <button type="button" class="primary" (click)="togglePanel('people')">Add people</button>
+            </div>
+          }
         }
       </section>
 
@@ -333,7 +260,7 @@
           <span class="control-label">Chat</span>
         </button>
         <button type="button" class="control-btn end-btn" aria-label="End Call" (click)="endCall()">
-          <span class="control-icon" aria-hidden="true">✆</span>
+          <svg class="control-icon hangup-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6.62 10.79a15.05 15.05 0 0 0 6.59 6.59l2.2-2.2a1 1 0 0 1 1.02-.24c1.12.37 2.33.57 3.57.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1C10.61 21 3 13.39 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1.02l-2.2 2.2z"/></svg>
           <span class="control-label">End Call</span>
         </button>
       </nav>

@@ -1,15 +1,12 @@
 .analytics-shell {
-  padding: 32px 40px;
+  padding: 32px clamp(16px, 4vw, 40px);
   max-width: 1000px;
   margin: 0 auto;
   color: #e5e7eb;
 }
 
 .analytics-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 32px;
+  margin-bottom: 28px;
 }
 
 .analytics-header .kicker {
@@ -22,7 +19,7 @@
 
 .analytics-header h1 {
   margin: 0 0 4px;
-  font-size: 32px;
+  font-size: clamp(24px, 5vw, 32px);
   font-weight: 700;
 }
 
@@ -218,4 +215,30 @@
   padding: 5px 12px;
   font-size: 13px;
   color: #cbd5e1;
+}
+
+
+@media (max-width: 640px) {
+  .analytics-shell {
+    padding-top: 20px;
+  }
+
+  /* Two tiles per row instead of one long column. */
+  .stat-tile {
+    flex-basis: calc(50% - 6px);
+    min-width: 0;
+  }
+
+  .stat-value {
+    font-size: 22px;
+  }
+
+  .plot-row {
+    height: 160px;
+  }
+
+  .plot-row,
+  .tick-row {
+    gap: 4px;
+  }
 }

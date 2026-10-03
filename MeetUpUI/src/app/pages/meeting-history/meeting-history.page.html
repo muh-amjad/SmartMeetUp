@@ -29,21 +29,21 @@
           <th>Ended</th>
           <th>Participants</th>
           <th>Role</th>
-          <th></th>
+          <th><span class="visually-hidden">Open</span></th>
         </tr>
       </thead>
       <tbody>
         @for (m of meetings(); track m.meetingId) {
           <tr>
             <td class="title">{{ m.title }}</td>
-            <td>
+            <td class="status" data-label="Status">
               <span class="status-badge" [class]="statusClass(m.status)">{{ m.status }}</span>
             </td>
-            <td>{{ m.actualStartUtc ? (m.actualStartUtc | date:'short') : '—' }}</td>
-            <td>{{ m.endedUtc ? (m.endedUtc | date:'short') : '—' }}</td>
-            <td>{{ m.participantCount }}</td>
-            <td>{{ m.isHost ? 'Host' : 'Participant' }}</td>
-            <td>
+            <td data-label="Started">{{ m.actualStartUtc ? (m.actualStartUtc | date:'short') : '—' }}</td>
+            <td data-label="Ended">{{ m.endedUtc ? (m.endedUtc | date:'short') : '—' }}</td>
+            <td data-label="Participants">{{ m.participantCount }}</td>
+            <td data-label="Role">{{ m.isHost ? 'Host' : 'Participant' }}</td>
+            <td class="action">
               <button
                 type="button"
                 (click)="openMeeting(m)"

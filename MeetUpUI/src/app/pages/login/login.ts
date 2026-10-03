@@ -4,6 +4,7 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { gsap } from 'gsap';
 import { AuthService } from '../../services/auth.service';
+import { httpErrorMessage } from '../../utils/http-error-message';
 
 @Component({
   selector: 'app-login',
@@ -56,7 +57,7 @@ export class LoginPage implements AfterViewInit {
       },
       error: (error) => {
         this.isSubmitting.set(false);
-        this.errorMessage.set(error?.error?.toString?.() || 'Login failed. Check your credentials and try again.');
+        this.errorMessage.set(httpErrorMessage(error, 'Login failed. Check your credentials and try again.'));
       },
     });
   }

@@ -1,5 +1,6 @@
 import { inject, Injectable } from '@angular/core';
 import * as signalR from '@microsoft/signalr';
+import { Subject } from 'rxjs';
 import { UsersFacade } from '../store/facades/users.facade';
 import { AuthService } from './auth.service';
 import { environment } from '../../environments/environment';
@@ -19,6 +20,20 @@ export type InviteRingingPayload = {
   meetingId: string;
   toUserId: string;
   toUsername: string;
+};
+
+/** The caller hung up (or left, or dropped) before the invite was answered. */
+export type InviteCancelledPayload = {
+  inviteId: string;
+  meetingId: string;
+};
+
+/** The callee let the call ring out, or went offline while it was ringing. */
+export type InviteMissedPayload = {
+  inviteId: string;
+  meetingId: string;
+  missedByUserId: string;
+  missedByUsername: string;
 };
 
 export type InviteDeclinedPayload = {
@@ -50,10 +65,15 @@ export type SpeakingInterval = {
   stoppedUtc: string;
 };
 
+/**
+ * Events for whichever page is showing. Incoming invites are deliberately not here: they are
+ * app-wide (see `incomingInvites$`), so a call can ring on any page, not only on the two that
+ * used to register for it.
+ */
 export type SignalRCallbacks = {
-  onIncomingInvite?: (payload: InvitePayload) => void;
   onInviteRinging?: (payload: InviteRingingPayload) => void;
   onInviteDeclined?: (payload: InviteDeclinedPayload) => void;
+  onInviteMissed?: (payload: InviteMissedPayload) => void;
   onInviteAccepted?: (payload: InviteAcceptedPayload) => void;
   onCallFailed?: (message: string) => void;
   onChatMessageReceived?: (payload: ChatMessageReceivedPayload) => void;
@@ -75,6 +95,18 @@ export class SignalrService {
   private hasJoinedCurrentConnection = false;
   private callbacks: SignalRCallbacks = {};
 
+  /** The connection attempt in flight, shared so overlapping callers don't start it twice. */
+  private connecting: Promise<void> | null = null;
+
+  /** Someone is calling this user. App-wide — the incoming-call popup listens to it. */
+  readonly incomingInvites$ = new Subject<InvitePayload>();
+
+  /** A call that was ringing here was withdrawn by its caller before it was answered. */
+  readonly inviteCancelled$ = new Subject<InviteCancelledPayload>();
+
+  /** The connection closed for good (automatic reconnect gave up, or it was stopped). */
+  readonly closed$ = new Subject<void>();
+
   /** The meeting this client last told the hub it is in, so a reconnect can restore it. */
   private activeMeetingId: string | null = null;
 
@@ -94,6 +126,12 @@ export class SignalrService {
       .withAutomaticReconnect()
       .build();
 
+    this.hubConnection.onclose(() => {
+      this.myConnectionID = '';
+      this.hasJoinedCurrentConnection = false;
+      this.closed$.next();
+    });
+
     this.hubConnection.onreconnected(async () => {
       this.myConnectionID = this.hubConnection.connectionId ?? '';
       this.hasJoinedCurrentConnection = false;
@@ -111,11 +149,27 @@ export class SignalrService {
     });
   }
 
-  async connectAndJoin(): Promise<void> {
+  /**
+   * Connects (if needed) and registers this user as online. Safe to call from several places at
+   * once: the app connects as soon as someone signs in, and the call page awaits the same
+   * attempt rather than racing a second start() — which SignalR rejects outright.
+   */
+  connectAndJoin(): Promise<void> {
     if (!this.authService.isAuthenticated()) {
-      return;
+      return Promise.resolve();
     }
 
+    this.connecting ??= this.startAndJoin().finally(() => {
+      this.connecting = null;
+    });
+    return this.connecting;
+  }
+
+  get isConnected(): boolean {
+    return this.hubConnection.state === signalR.HubConnectionState.Connected;
+  }
+
+  private async startAndJoin(): Promise<void> {
     if (this.hubConnection.state === signalR.HubConnectionState.Disconnected) {
       await this.hubConnection.start();
       this.myConnectionID = this.hubConnection.connectionId ?? '';
@@ -127,6 +181,7 @@ export class SignalrService {
   }
 
   async disconnect(): Promise<void> {
+    this.activeMeetingId = null;
     if (this.hubConnection.state !== signalR.HubConnectionState.Disconnected) {
       await this.hubConnection.stop();
     }
@@ -160,13 +215,25 @@ export class SignalrService {
     await this.hubConnection.invoke('InviteToMeeting', targetConnectionId, meetingId);
   }
 
-  /** Accept or decline an invite. */
-  async respondToInvite(inviteId: string, accepted: boolean): Promise<void> {
+  /**
+   * Accept or decline an invite. Resolves false when the call no longer stands — the caller hung
+   * up a moment before — so an accept doesn't walk into an empty room.
+   */
+  async respondToInvite(inviteId: string, accepted: boolean): Promise<boolean> {
+    if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
+      return false;
+    }
+
+    return await this.hubConnection.invoke<boolean>('RespondToInvite', inviteId, accepted);
+  }
+
+  /** Report that an invite rang out unanswered, so the caller hears it was missed. */
+  async missInvite(inviteId: string): Promise<void> {
     if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
       return;
     }
 
-    await this.hubConnection.invoke('RespondToInvite', inviteId, accepted);
+    await this.hubConnection.invoke('MissInvite', inviteId);
   }
 
   setCallbacks(callbacks: SignalRCallbacks): void {
@@ -190,7 +257,7 @@ export class SignalrService {
     await this.hubConnection.invoke('SetLeftCall');
   }
 
-    /** Send a chat message to the current meeting (hub persists + broadcasts). */
+  /** Send a chat message to the current meeting (hub persists + broadcasts). */
   async sendChatMessage(meetingId: string, text: string): Promise<void> {
     if (this.hubConnection.state !== signalR.HubConnectionState.Connected) {
       return;
@@ -239,7 +306,15 @@ export class SignalrService {
     );
 
     this.hubConnection.on('ReceiveInvite', (payload: InvitePayload) => {
-      this.callbacks.onIncomingInvite?.(payload);
+      this.incomingInvites$.next(payload);
+    });
+
+    this.hubConnection.on('InviteCancelled', (payload: InviteCancelledPayload) => {
+      this.inviteCancelled$.next(payload);
+    });
+
+    this.hubConnection.on('InviteMissed', (payload: InviteMissedPayload) => {
+      this.callbacks.onInviteMissed?.(payload);
     });
 
     this.hubConnection.on('InviteRinging', (payload: InviteRingingPayload) => {

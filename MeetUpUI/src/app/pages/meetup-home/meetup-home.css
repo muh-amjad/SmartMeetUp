@@ -1,20 +1,11 @@
+/* Dark throughout, like the rest of the app; colours come from the global tokens in styles.css. */
 :host {
-    --ink: #0f172a;
-    --ink-soft: #334155;
-    --muted: #64748b;
-    --line: #e2e8f0;
-    --teal: #0f766e;
-    --sky: #0284c7;
-    --danger: #dc2626;
-    --stage-bg: #0b1220;
+    --stage-bg: #070b14;
     --tile-bg: #111c2e;
-    --card: rgba(255, 255, 255, 0.9);
-    --card-shadow: 0 14px 45px rgba(15, 23, 42, 0.12);
 
     display: block;
     min-height: 100vh;
     min-height: 100dvh;
-    font-family: 'Manrope', 'Segoe UI', sans-serif;
 }
 
 *,
@@ -42,30 +33,27 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible {
-    outline: 3px solid #38bdf8;
+    outline: 3px solid var(--accent-text);
     outline-offset: 2px;
 }
 
-.primary,
-.secondary {
-    background: #e2e8f0;
-    color: var(--ink);
-}
-
 .primary {
-    background: linear-gradient(95deg, var(--teal), var(--sky));
+    background: var(--accent);
     color: #fff;
 }
 
-.danger,
-.reject-btn {
-    background: linear-gradient(95deg, var(--danger), #f97316);
-    color: #fff;
+.primary:hover:not(:disabled) {
+    background: var(--accent-hover);
 }
 
-.accept-btn {
-    background: linear-gradient(95deg, #16a34a, #0ea5e9);
-    color: #fff;
+.secondary {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+}
+
+.secondary:hover:not(:disabled) {
+    background: var(--surface-3);
 }
 
 .avatar {
@@ -74,7 +62,7 @@ input:focus-visible {
     width: clamp(3rem, 18cqmin, 6rem);
     aspect-ratio: 1;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--teal), var(--sky));
+    background: var(--accent);
     color: #fff;
     font-weight: 800;
     font-size: clamp(1.2rem, 8cqmin, 2.6rem);
@@ -100,10 +88,9 @@ input:focus-visible {
     white-space: nowrap;
 }
 
-.person-text p,
 .person-text small {
     margin: 0.1rem 0 0;
-    color: var(--muted);
+    color: var(--text-muted);
     font-size: 0.82rem;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -113,28 +100,16 @@ input:focus-visible {
 .status {
     font-size: 0.78rem;
     font-weight: 700;
-    color: #15803d;
+    color: #86efac;
 }
 
 .status.busy {
-    color: #b45309;
-}
-
-.online {
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: #15803d;
-}
-
-.offline {
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: var(--muted);
+    color: #fcd34d;
 }
 
 .empty {
     margin: 0.5rem 0;
-    color: var(--muted);
+    color: var(--text-muted);
     font-size: 0.9rem;
 }
 
@@ -142,9 +117,21 @@ input:focus-visible {
     margin: 0;
     padding: 0.7rem 1rem;
     border-radius: 12px;
-    background: #fef2f2;
-    color: #b91c1c;
+    background: rgba(239, 68, 68, 0.14);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    color: var(--danger-text);
     font-weight: 600;
+}
+
+.person-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.7rem;
+    border-radius: 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    min-width: 0;
 }
 
 /* ── Page shell ─────────────────────────────────────────────────────── */
@@ -152,186 +139,83 @@ input:focus-visible {
 .app-shell {
     min-height: 100vh;
     min-height: 100dvh;
-    background:
-        radial-gradient(circle at 8% 2%, rgba(234, 179, 8, 0.2), transparent 26%),
-        radial-gradient(circle at 93% 10%, rgba(14, 165, 233, 0.24), transparent 26%),
-        linear-gradient(140deg, #f8fafc 0%, #eef8ff 43%, #ecfeff 100%);
-    padding: clamp(0.75rem, 2vw, 1.2rem);
-    display: grid;
-    align-content: start;
-    gap: 1rem;
-}
-
-.app-shell.in-call {
-    padding: 0;
     background: var(--stage-bg);
-    display: block;
+    color: var(--text);
 }
 
-/* ── Incoming call ──────────────────────────────────────────────────── */
+/* ── Joining, calling, or could not join ───────────────────────────── */
 
-.incoming-call-banner,
-.ringing-banner {
-    padding: 0.85rem 1rem;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.75rem;
-    background: var(--card);
-    color: var(--ink);
-    border-radius: 18px;
-    box-shadow: var(--card-shadow);
+.status-screen {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: max(16px, env(safe-area-inset-top)) var(--page-gutter) max(16px, env(safe-area-inset-bottom));
+    background:
+        radial-gradient(circle at 50% 30%, rgba(59, 130, 246, 0.14), transparent 45%),
+        var(--stage-bg);
 }
 
-.incoming-call-banner {
-    border-left: 6px solid var(--teal);
-}
-
-.ringing-banner {
-    border-left: 6px solid #0ea5e9;
-}
-
-.incoming-text {
-    display: flex;
-    align-items: center;
-    gap: 0.7rem;
-    min-width: 0;
-}
-
-.incoming-text small {
-    display: block;
-    color: var(--muted);
-    font-size: 0.8rem;
-}
-
-.incoming-actions {
-    display: flex;
-    gap: 0.6rem;
-    margin-left: auto;
-}
-
-/* Over the call, the invite floats above the video instead of pushing it around. */
-.in-call .incoming-call-banner {
-    position: fixed;
-    top: 0.75rem;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(92vw, 540px);
-    z-index: 60;
-}
-
-/* ── Lobby ──────────────────────────────────────────────────────────── */
-
-.top-bar {
-    padding: 1rem 1.2rem;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: 1rem;
-    background: var(--card);
+.status-card {
+    width: min(420px, 100%);
+    text-align: center;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
     border-radius: 20px;
-    box-shadow: var(--card-shadow);
+    padding: clamp(1.5rem, 5vw, 2.25rem);
+    box-shadow: var(--shadow);
 }
 
-.kicker {
-    margin: 0;
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    color: #92400e;
-}
-
-.top-bar h1 {
-    margin: 0.25rem 0;
-    color: var(--ink);
-    font-size: clamp(1.4rem, 3.5vw, 2rem);
-}
-
-.identity {
-    margin: 0;
-    color: var(--ink-soft);
+.status-card h1 {
+    margin: 1rem 0 0.35rem;
+    font-size: clamp(1.25rem, 5vw, 1.5rem);
+    line-height: 1.3;
     overflow-wrap: anywhere;
 }
 
-.header-actions {
+.status-card p {
+    margin: 0;
+    color: var(--text-muted);
+}
+
+.status-actions {
+    margin-top: 1.5rem;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.65rem;
-}
-
-.lobby-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-    gap: 1rem;
-    align-items: start;
-}
-
-.search-panel,
-.users-section {
-    padding: 1rem;
-    background: var(--card);
-    border-radius: 20px;
-    box-shadow: var(--card-shadow);
-    min-width: 0;
-}
-
-.search-panel h2,
-.users-section h3 {
-    margin: 0;
-    color: var(--ink);
-}
-
-.search-form {
-    margin-top: 0.75rem;
-    display: flex;
+    justify-content: center;
     gap: 0.6rem;
 }
 
-.search-form input {
-    flex: 1;
-    min-width: 0;
-    padding: 0.62rem 0.9rem;
-    border: 1px solid #cbd5e1;
-    border-radius: 999px;
-    font: inherit;
+.status-actions button {
+    flex: 1 1 140px;
 }
 
-.search-form button {
-    background: linear-gradient(95deg, var(--teal), var(--sky));
-    color: #fff;
+.spinner {
+    display: inline-block;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 4px solid var(--border-strong);
+    border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
 }
 
-.search-message {
-    margin: 0.6rem 0 0;
-    color: var(--muted);
-    font-size: 0.9rem;
+.status-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger-text);
+    font-size: 1.5rem;
+    font-weight: 800;
 }
 
-.search-results {
-    margin-top: 0.6rem;
-    display: grid;
-    gap: 0.5rem;
-}
-
-.search-item,
-.user-item,
-.person-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.6rem 0.7rem;
-    border-radius: 14px;
-    background: #f8fafc;
-    border: 1px solid var(--line);
-    min-width: 0;
-}
-
-.users-section {
-    display: grid;
-    gap: 0.5rem;
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 /* ── Call layout ────────────────────────────────────────────────────── */
@@ -601,8 +485,9 @@ input:focus-visible {
     gap: 0.75rem;
     padding: 0.55rem 0.6rem 0.55rem 1rem;
     border-radius: 999px;
-    background: rgba(15, 23, 42, 0.82);
-    color: #e2e8f0;
+    background: rgba(15, 23, 42, 0.88);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
     white-space: nowrap;
     z-index: 4;
 }
@@ -610,6 +495,41 @@ input:focus-visible {
 .waiting-card p {
     margin: 0;
     font-size: 0.9rem;
+}
+
+/* The person being called, while their phone rings. */
+.calling-card {
+    padding: 0.55rem 1.1rem 0.55rem 0.6rem;
+}
+
+.calling-card .avatar-sm {
+    position: relative;
+}
+
+.calling-card .avatar-sm::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 2px solid var(--accent-text);
+    animation: ring-out 1.6s ease-out infinite;
+}
+
+.calling-card small {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+@keyframes ring-out {
+    from {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+    to {
+        transform: scale(1.5);
+        opacity: 0;
+    }
 }
 
 /* ── Side panel (chat / people) ─────────────────────────────────────── */
@@ -621,8 +541,9 @@ input:focus-visible {
     min-height: 0;
     margin: 0 clamp(0.5rem, 1.5vw, 1rem) 0 0;
     border-radius: 18px;
-    background: #fff;
-    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
     overflow: hidden;
 }
 
@@ -631,7 +552,7 @@ input:focus-visible {
     align-items: center;
     justify-content: space-between;
     padding: 0.8rem 1rem;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--border);
 }
 
 .panel-header h3 {
@@ -643,12 +564,13 @@ input:focus-visible {
     width: 2.2rem;
     height: 2.2rem;
     padding: 0;
-    background: #f1f5f9;
-    color: var(--ink-soft);
+    background: var(--surface-2);
+    color: var(--text-muted);
 }
 
 .icon-btn:hover {
-    background: var(--line);
+    background: var(--surface-3);
+    color: var(--text);
 }
 
 .chat-messages {
@@ -663,7 +585,7 @@ input:focus-visible {
 
 .chat-empty {
     margin: auto;
-    color: var(--muted);
+    color: var(--text-muted);
     font-size: 0.9rem;
 }
 
@@ -672,13 +594,13 @@ input:focus-visible {
     align-self: flex-start;
     padding: 0.5rem 0.75rem;
     border-radius: 14px 14px 14px 4px;
-    background: #f1f5f9;
+    background: var(--surface-2);
 }
 
 .chat-message.chat-mine {
     align-self: flex-end;
     border-radius: 14px 14px 4px 14px;
-    background: linear-gradient(95deg, #ccfbf1, #e0f2fe);
+    background: rgba(59, 130, 246, 0.22);
 }
 
 .chat-meta {
@@ -686,12 +608,12 @@ input:focus-visible {
     gap: 0.5rem;
     align-items: baseline;
     font-size: 0.72rem;
-    color: var(--muted);
+    color: var(--text-faint);
 }
 
 .chat-sender {
     font-weight: 800;
-    color: var(--ink-soft);
+    color: var(--text-muted);
 }
 
 .chat-text {
@@ -704,7 +626,7 @@ input:focus-visible {
     display: flex;
     gap: 0.5rem;
     padding: 0.75rem;
-    border-top: 1px solid var(--line);
+    border-top: 1px solid var(--border);
 }
 
 .chat-input input,
@@ -712,9 +634,18 @@ input:focus-visible {
     flex: 1;
     min-width: 0;
     padding: 0.6rem 0.85rem;
-    border: 1px solid #cbd5e1;
+    border: 1px solid var(--border-strong);
     border-radius: 999px;
+    background: var(--bg);
+    color: var(--text);
     font: inherit;
+    /* 16px stops iOS zooming into the field. */
+    font-size: 1rem;
+}
+
+.chat-input input::placeholder,
+.people-filter::placeholder {
+    color: var(--text-faint);
 }
 
 .people-body {
@@ -737,7 +668,7 @@ input:focus-visible {
     font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--muted);
+    color: var(--text-faint);
 }
 
 .people-filter {
@@ -769,32 +700,44 @@ input:focus-visible {
     min-width: 4.5rem;
     padding: 0.5rem 0.8rem;
     border-radius: 16px;
-    background: #1e293b;
-    color: #e2e8f0;
+    background: var(--surface-2);
+    color: var(--text);
 }
 
 .control-btn:hover {
-    background: #273449;
+    background: var(--surface-3);
 }
 
+/* Mic or camera off: a light button, so the off state reads at a glance. */
 .control-btn.off {
-    background: #f1f5f9;
-    color: var(--ink);
+    background: #e5e7eb;
+    color: #0f172a;
 }
 
 .control-btn.active {
-    background: #134e4a;
-    color: #ccfbf1;
+    background: rgba(59, 130, 246, 0.28);
+    color: #dbeafe;
 }
 
 .control-btn.end-btn {
-    background: linear-gradient(95deg, var(--danger), #f97316);
+    background: var(--danger);
     color: #fff;
+}
+
+.control-btn.end-btn:hover {
+    background: #dc2626;
 }
 
 .control-icon {
     font-size: 1.15rem;
     line-height: 1;
+}
+
+/* The handset, turned down: hang up. */
+.hangup-icon {
+    width: 1.3rem;
+    height: 1.3rem;
+    transform: rotate(135deg);
 }
 
 .control-label {
@@ -803,12 +746,6 @@ input:focus-visible {
 }
 
 /* ── Tablets and phones ─────────────────────────────────────────────── */
-
-@media (max-width: 900px) {
-    .lobby-grid {
-        grid-template-columns: 1fr;
-    }
-}
 
 /*
  * Upright tablets and phones: the panel slides up over the bottom of the video rather than
@@ -879,18 +816,6 @@ input:focus-visible {
 }
 
 @media (max-width: 560px) {
-    .search-form {
-        flex-direction: column;
-    }
-
-    .header-actions {
-        width: 100%;
-    }
-
-    .header-actions button {
-        flex: 1;
-    }
-
     /* Icons only — the labels stay as accessible names on each button. */
     .control-label {
         position: absolute;
@@ -919,6 +844,15 @@ input:focus-visible {
         width: calc(100% - 2rem);
         border-radius: 16px;
         justify-content: space-between;
+    }
+
+    .calling-card {
+        justify-content: flex-start;
+    }
+
+    .calling-card p {
+        min-width: 0;
+        overflow-wrap: anywhere;
     }
 }
 
@@ -977,5 +911,10 @@ input:focus-visible {
 
     .tile {
         transition: none;
+    }
+
+    .spinner,
+    .calling-card .avatar-sm::after {
+        animation: none;
     }
 }

@@ -82,4 +82,19 @@ public sealed class InMemoryPresenceTracker : IPresenceTracker
     {
         return _invitesById.TryRemove(inviteId, out invite);
     }
+
+    public IReadOnlyList<CallInvite> RemoveInvites(Func<CallInvite, bool> predicate)
+    {
+        var removed = new List<CallInvite>();
+        foreach (var entry in _invitesById)
+        {
+            // Removing by key *and* value means two racing callers can't both claim the same invite.
+            if (predicate(entry.Value) && _invitesById.TryRemove(entry))
+            {
+                removed.Add(entry.Value);
+            }
+        }
+
+        return removed;
+    }
 }

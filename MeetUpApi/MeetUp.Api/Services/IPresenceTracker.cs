@@ -25,6 +25,9 @@ public interface IPresenceTracker
     // Pending call invites (keyed by invite id)
     void AddInvite(CallInvite invite);
     bool TryRemoveInvite(string inviteId, [NotNullWhen(true)] out CallInvite? invite);
+
+    /// <summary>Removes and returns every pending invite that matches. Each invite is returned by at most one caller.</summary>
+    IReadOnlyList<CallInvite> RemoveInvites(Func<CallInvite, bool> predicate);
 }
 
 public sealed record CallInvite(string InviteId, string RoomId, string CallerConnectionId, string CalleeConnectionId);
