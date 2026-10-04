@@ -249,7 +249,7 @@ namespace MeetUp.Api
             {
                 options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
                 {
-                    Title = "MeetUp API",
+                    Title = "SmartMeetUp API",
                     Version = "v1",
                 });
 
