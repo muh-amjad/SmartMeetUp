@@ -86,16 +86,11 @@
   text-decoration: none;
 }
 
+/* The SmartMeetUp symbol (public/brand/logo-mark.svg). */
 .brand-mark {
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  font-size: 0.86rem;
-  font-weight: 700;
-  color: #ffffff;
-  background: var(--accent);
+  width: 2rem;
+  height: 2rem;
+  display: block;
   flex: none;
 }
 

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="56 56 400 400" width="400" height="400" role="img" aria-label="SmartMeetUp"><title>SmartMeetUp</title><g transform="translate(0 0) scale(1.0)">
+  <defs>
+    <linearGradient id="f-g" x1="64" y1="60" x2="448" y2="452" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3D8BFF"/><stop offset="1" stop-color="#6B4EF0"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#f-g)">
+    <path d="M140.0,60.0 L372.0,60.0 A76.0,76.0 0 0 1 372.0,212.0 L208.4,212.0 C155.2,212.0 109.6,234.8 94.4,277.4 C68.6,246.2 64.0,162.6 64.0,136.0 A76.0,76.0 0 0 1 140.0,60.0 Z"/>
+    <path d="M372.0,452.0 L140.0,452.0 A76.0,76.0 0 0 1 140.0,300.0 L303.6,300.0 C356.8,300.0 402.4,277.2 417.6,234.6 C443.4,265.8 448.0,349.4 448.0,376.0 A76.0,76.0 0 0 1 372.0,452.0 Z"/>
+  </g>
+</g></svg>
